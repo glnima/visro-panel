@@ -64,8 +64,8 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
             </button>
           </div>
           {tabs.length > 1 && (
-            <nav className="w-full -mx-1 overflow-x-auto">
-              <div className="flex w-max rounded-lg bg-[#2C1B13] p-1 gap-0.5 mx-1">
+            <nav className="w-full min-w-0 overflow-x-auto">
+              <div className="flex w-max rounded-lg bg-[#2C1B13] p-1 gap-0.5">
                 {tabs.map((t) => (
                   <button
                     key={t.key}

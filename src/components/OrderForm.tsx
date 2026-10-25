@@ -148,20 +148,27 @@ export default function OrderForm({ products, categories, customers, initial, on
           ))}
         </datalist>
       </label>
-      <div className="grid sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label className={labelCls}>
           تاریخ سفارش
-          <JalaliDateInput value={orderDate} onChange={setOrderDate} />
+          <JalaliDateInput
+            value={orderDate}
+            onChange={(d) => {
+              setOrderDate(d);
+              // keep the delivery date from landing before the order date
+              if (requested < d) setRequested(d);
+            }}
+          />
         </label>
         <label className={labelCls}>
           تاریخ تحویل
-          <JalaliDateInput value={requested} onChange={setRequested} />
+          <JalaliDateInput value={requested} onChange={setRequested} min={orderDate} />
         </label>
       </div>
 
       <div className="rounded-lg bg-[#EDE6D6] p-3.5">
         <div className="text-xs text-[#6B5E4F] mb-2">افزودن مدل به این سفارش</div>
-        <div className="grid sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className={labelCls + " sm:col-span-2"}>
             مدل
             <select value={selectedId} onChange={(e) => setPickProductId(Number(e.target.value))} className={inputCls}>
