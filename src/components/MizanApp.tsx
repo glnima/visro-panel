@@ -1,304 +1,117 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import StoreView, { type OrderDraft } from "./StoreView";
-import WorkshopView from "./WorkshopView";
-import ProductsView from "./ProductsView";
+import { useCallback, useRef, useState } from "react";
+import { LogOut, WifiOff } from "lucide-react";
+import AuditView from "./AuditView";
+import CustomersView from "./CustomersView";
 import HistoryView from "./HistoryView";
-import { daysAgo, daysFromNow } from "@/lib/format";
-import { STATIONS, emptyProduction, fullProduction, groupByStation, nextStepMessage } from "@/lib/production";
-import { sanitizeOrders, sanitizeProducts } from "@/lib/sanitize";
-import { seedOrders, seedProducts } from "@/lib/seed";
-import { PRODUCTS_KEY, STORAGE_KEY } from "@/lib/storage";
-import type { Category, Order, Product, StageKey } from "@/lib/types";
-import { useSharedList } from "@/lib/useSharedList";
-import { useTimedValue } from "@/lib/useTimedValue";
+import ProductsView from "./ProductsView";
+import ReportsView from "./ReportsView";
+import SettingsView from "./SettingsView";
+import StoreView from "./StoreView";
+import WorkshopView from "./WorkshopView";
+import { ROLE_LABELS, type Role, type User } from "@/lib/types";
+import { useMizanData } from "@/lib/useMizanData";
 
-type View = "store" | "workshop" | "products" | "history";
+type View = "store" | "workshop" | "customers" | "history" | "reports" | "products" | "settings" | "audit";
 
-const TABS: [View, string][] = [
-  ["store", "فروشگاه"],
-  ["workshop", "کارگاه تولید"],
-  ["products", "محصولات"],
-  ["history", "تاریخچه"],
+const TABS: { key: View; label: string; roles: Role[] }[] = [
+  { key: "store", label: "فروشگاه", roles: ["admin", "store"] },
+  { key: "workshop", label: "کارگاه تولید", roles: ["admin", "store", "workshop"] },
+  { key: "customers", label: "مشتری‌ها", roles: ["admin", "store"] },
+  { key: "history", label: "تاریخچه", roles: ["admin", "store", "workshop"] },
+  { key: "reports", label: "گزارش‌ها", roles: ["admin", "store"] },
+  { key: "products", label: "محصولات", roles: ["admin"] },
+  { key: "settings", label: "تنظیمات", roles: ["admin"] },
+  { key: "audit", label: "رویدادها", roles: ["admin"] },
 ];
 
-const getSeedProducts = () => seedProducts;
+export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => void }) {
+  const tabs = TABS.filter((t) => t.roles.includes(me.role));
+  const [view, setView] = useState<View>(tabs[0].key);
+  const { data, offline, refresh } = useMizanData();
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
 
-// NOTE: IDs are computed in the browser, so two people can create the same one.
-// Kept as in the prototype; moved to the server in Phase 2.
-function nextId(prefix: string, ids: string[], fallbackBase: number): string {
-  const re = new RegExp(`^${prefix}(\\d+)$`);
-  const nums = ids
-    .map((id) => {
-      const m = re.exec(id || "");
-      return m ? parseInt(m[1], 10) : NaN;
-    })
-    .filter((n) => Number.isFinite(n));
-  const base = nums.length ? Math.max(...nums) : fallbackBase;
-  return `${prefix}${base + 1}`;
-}
+  const flash = useCallback((id: number) => {
+    setHighlightId(id);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setHighlightId(null), 2200);
+  }, []);
 
-export default function MizanApp() {
-  const [view, setView] = useState<View>("store");
-
-  const ordersStore = useSharedList<Order>(STORAGE_KEY, seedOrders, sanitizeOrders);
-  const productsStore = useSharedList<Product>(PRODUCTS_KEY, getSeedProducts, sanitizeProducts);
-  const orders = ordersStore.items;
-  const products = productsStore.items;
-  const saveOrders = ordersStore.save;
-  const saveProducts = productsStore.save;
-  const syncError = ordersStore.syncError || productsStore.syncError;
-
-  const [toast, showToast] = useTimedValue("", 2600);
-  const [errorMsg, showError] = useTimedValue("", 3500);
-  const [highlightId, flash] = useTimedValue<string | null>(null, 2200);
-  const [confirmDeleteId, armDeleteOrder, disarmDeleteOrder] = useTimedValue<string | null>(null, 3000);
-  const [confirmDeleteProductId, armDeleteProduct, disarmDeleteProduct] = useTimedValue<string | null>(null, 3000);
-  const [resetArmed, armReset, disarmReset] = useTimedValue(false, 3000);
-
-  // ---- order actions ----
-  const createOrder = (draft: OrderDraft, ready: boolean): boolean => {
-    try {
-      if (ordersStore.loading) return false;
-      const customerName = (draft.customer || "").trim();
-      if (!customerName) {
-        showError("نام مشتری رو وارد کن");
-        return false;
-      }
-      if (draft.items.length === 0) {
-        showError("حداقل یه مدل به سفارش اضافه کن");
-        return false;
-      }
-      const id = nextId("SF-", orders.map((o) => o.id), 2000);
-      const newOrder: Order = {
-        id,
-        customer: customerName,
-        items: draft.items,
-        requested: draft.requested || daysFromNow(14),
-        createdAt: draft.orderDate || daysAgo(0),
-        registeredAt: new Date().toISOString(),
-        production: ready ? fullProduction() : emptyProduction(),
-        delivered: false,
-        deliveredAt: null,
-        notes: (draft.notes || "").trim(),
-      };
-      saveOrders((prev) => [newOrder, ...prev]);
-      showToast(
-        ready
-          ? `سفارش ${id} به‌عنوان آماده ثبت شد و توی «تحویل نهایی» کارگاه منتظره`
-          : `سفارش ${id} ثبت شد و به کارگاه ارسال شد`
-      );
-      flash(id);
-      return true;
-    } catch {
-      showError("ثبت سفارش با خطا مواجه شد — دوباره امتحان کن");
-      return false;
-    }
-  };
-
-  const advanceProduction = (id: string, key: StageKey) => {
-    try {
-      const stationLabel = STATIONS.find((s) => s.key === key)?.label || key;
-      let nextMsg = "";
-      saveOrders((prev) =>
-        prev.map((o) => {
-          if (o.id !== id) return o;
-          const updated = { ...o, production: { ...o.production, [key]: true } };
-          nextMsg = nextStepMessage(updated.production);
-          return updated;
-        })
-      );
-      showToast(`${stationLabel} سفارش ${id} تمام شد${nextMsg ? " — " + nextMsg : ""}`);
-      flash(id);
-    } catch {
-      showError("ثبت مرحله با خطا مواجه شد — دوباره امتحان کن");
-    }
-  };
-
-  const deliver = (id: string) => {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      saveOrders((prev) => prev.map((o) => (o.id === id ? { ...o, delivered: true, deliveredAt: today } : o)));
-      showToast(`سفارش ${id} تحویل داده شد`);
-    } catch {
-      showError("ثبت تحویل با خطا مواجه شد — دوباره امتحان کن");
-    }
-  };
-
-  const deleteOrder = (id: string) => {
-    if (confirmDeleteId !== id) {
-      armDeleteOrder(id);
-      return;
-    }
-    disarmDeleteOrder();
-    try {
-      saveOrders((prev) => prev.filter((o) => o.id !== id));
-      showToast(`سفارش ${id} حذف شد`);
-    } catch {
-      showError("حذف سفارش با خطا مواجه شد — دوباره امتحان کن");
-    }
-  };
-
-  const jumpToOrder = (id: string) => {
+  const jumpToOrder = (id: number) => {
     setView("workshop");
     flash(id);
   };
 
-  const resetDemoData = () => {
-    if (!resetArmed) {
-      armReset(true);
-      return;
-    }
-    disarmReset();
-    saveOrders(seedOrders());
-    saveProducts(seedProducts);
-    showToast("داده‌ها به حالت نمونه بازنشانی شد");
-  };
-
-  // ---- product catalog actions ----
-  const addProduct = (name: string, category: Category, price: number): boolean => {
-    if (!name) {
-      showError("نام محصول رو وارد کن");
-      return false;
-    }
-    try {
-      const id = nextId("P", products.map((p) => p.id), 100);
-      saveProducts((prev) => [...prev, { id, name, category, price }]);
-      showToast(`محصول «${name}» اضافه شد`);
-      return true;
-    } catch {
-      showError("افزودن محصول با خطا مواجه شد — دوباره امتحان کن");
-      return false;
-    }
-  };
-
-  const deleteProduct = (id: string) => {
-    if (confirmDeleteProductId !== id) {
-      armDeleteProduct(id);
-      return;
-    }
-    disarmDeleteProduct();
-    try {
-      saveProducts((prev) => prev.filter((p) => p.id !== id));
-      showToast("محصول حذف شد");
-    } catch {
-      showError("حذف محصول با خطا مواجه شد — دوباره امتحان کن");
-    }
-  };
-
-  // ---- derived data ----
-  const ledger = useMemo(() => {
-    return [...orders].sort((a, b) => {
-      if (a.delivered !== b.delivered) return a.delivered ? 1 : -1;
-      return (b.createdAt || "").localeCompare(a.createdAt || "");
-    });
-  }, [orders]);
-
-  const stationOrders = useMemo(() => groupByStation(orders), [orders]);
-
-  const loading = ordersStore.loading || productsStore.loading;
-
   return (
-    <div className="min-h-screen w-full bg-[#EDE6D6] text-[#2B2420]">
-      {/* Header */}
+    <div className="min-h-screen w-full bg-[#EDE6D6] text-[#2B2420] pb-20">
       <header className="bg-[#3B241A] text-[#F3EEE1]">
-        <div className="mx-auto max-w-6xl px-5 py-4 flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <div className="text-xl font-bold tracking-tight">میزان</div>
-            <div className="text-xs text-[#C9B79E] mt-0.5">هماهنگی فروش و تولید مبل — نسخه v43</div>
+        <div className="mx-auto max-w-6xl px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-4">
+            <div>
+              <div className="text-xl font-bold tracking-tight">میزان</div>
+              <div className="text-xs text-[#C9B79E] mt-0.5">هماهنگی فروش و تولید مبل</div>
+            </div>
           </div>
-          <nav className="flex flex-wrap rounded-lg bg-[#2C1B13] p-1 gap-0.5">
-            {TABS.map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                className={
-                  "px-3.5 py-1.5 text-sm rounded-md transition-colors " +
-                  (view === key ? "bg-[#9C7A3C] text-[#2B2420] font-semibold" : "text-[#D9CDB6]")
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
+          <div className="flex items-center gap-3 text-xs text-[#D9CDB6]">
+            <span>
+              {me.displayName} · {ROLE_LABELS[me.role]}
+            </span>
+            <button onClick={onLogout} className="flex items-center gap-1 rounded-md border border-[#5C4033] px-2 py-1 hover:bg-[#4A2E22]">
+              <LogOut size={13} />
+              خروج
+            </button>
+          </div>
+          {tabs.length > 1 && (
+            <nav className="w-full -mx-1 overflow-x-auto">
+              <div className="flex w-max rounded-lg bg-[#2C1B13] p-1 gap-0.5 mx-1">
+                {tabs.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setView(t.key)}
+                    className={
+                      "px-3.5 py-1.5 text-sm rounded-md whitespace-nowrap transition-colors " +
+                      (view === t.key ? "bg-[#9C7A3C] text-[#2B2420] font-semibold" : "text-[#D9CDB6]")
+                    }
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </nav>
+          )}
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-5">
-        <div className="mt-4 text-xs text-[#6B5E4F] bg-[#E4DCC8] border border-[#D9CDB6] rounded-lg px-4 py-2 flex items-center justify-between gap-3 flex-wrap">
-          <span>این اطلاعات بین هر کسی که این لینک رو داشته باشه مشترکه و زنده همگام می‌شه — فعلاً بدون ورود جدا برای هر نفر.</span>
-          <button
-            onClick={resetDemoData}
-            className={
-              "shrink-0 text-xs px-2.5 py-1 rounded-md border transition-colors " +
-              (resetArmed
-                ? "border-[#E3B6AC] bg-[#F3DFDA] text-[#8A3C2F] font-semibold"
-                : "border-[#D9CDB6] text-[#6B5E4F] hover:text-[#3B241A]")
-            }
-          >
-            {resetArmed ? "برای تأیید دوباره بزن" : "بازنشانی داده‌های نمونه"}
-          </button>
-        </div>
-        {syncError && (
-          <div className="mt-2 text-xs text-[#8A3C2F] bg-[#F3DFDA] border border-[#E3B6AC] rounded-lg px-4 py-2">
-            ذخیره‌سازی مشترک الان در دسترس نیست — تغییرات فقط روی همین صفحه می‌مونه.
-          </div>
-        )}
-      </div>
-
-      {toast && (
-        <div className="mx-auto max-w-6xl px-5">
-          <div className="mt-4 text-sm bg-[#16A34A] text-white rounded-lg px-4 py-2.5 flex items-center gap-2">
-            <CheckCircle2 size={16} />
-            {toast}
-          </div>
-        </div>
-      )}
-      {errorMsg && (
-        <div className="mx-auto max-w-6xl px-5">
-          <div className="mt-4 text-sm bg-[#DC2626] text-white rounded-lg px-4 py-2.5 flex items-center gap-2">
-            <AlertTriangle size={16} />
-            {errorMsg}
+      {offline && (
+        <div className="mx-auto max-w-6xl px-4 sm:px-5">
+          <div className="mt-3 flex items-center gap-2 text-xs text-[#8A3C2F] bg-[#F3DFDA] border border-[#E3B6AC] rounded-lg px-4 py-2">
+            <WifiOff size={14} />
+            اتصال به سرور قطع شده — اطلاعات صفحه ممکنه قدیمی باشه. به‌محض وصل شدن خودش به‌روز می‌شه.
           </div>
         </div>
       )}
 
-      <main className="mx-auto max-w-6xl px-5 py-8">
-        {loading ? (
-          <div className="text-center py-24 text-sm text-[#6B5E4F]">در حال بارگذاری اطلاعات مشترک…</div>
+      <main className="mx-auto max-w-6xl px-4 sm:px-5 py-6">
+        {!data ? (
+          <div className="text-center py-24 text-sm text-[#6B5E4F]">در حال بارگذاری اطلاعات…</div>
         ) : view === "store" ? (
-          <StoreView
-            products={products}
-            ledger={ledger}
-            highlightId={highlightId}
-            confirmDeleteId={confirmDeleteId}
-            toast={toast}
-            errorMsg={errorMsg}
-            onCreateOrder={createOrder}
-            onDelete={deleteOrder}
-            onJump={jumpToOrder}
-            showError={showError}
-          />
+          <StoreView data={data} refresh={refresh} highlightId={highlightId} onJump={jumpToOrder} onFlash={flash} />
         ) : view === "workshop" ? (
-          <WorkshopView
-            stationOrders={stationOrders}
-            highlightId={highlightId}
-            confirmDeleteId={confirmDeleteId}
-            onAdvance={advanceProduction}
-            onDeliver={deliver}
-            onDelete={deleteOrder}
-          />
+          <WorkshopView data={data} refresh={refresh} highlightId={highlightId} />
+        ) : view === "customers" ? (
+          <CustomersView data={data} refresh={refresh} />
+        ) : view === "history" ? (
+          <HistoryView data={data} refresh={refresh} />
+        ) : view === "reports" ? (
+          <ReportsView data={data} />
         ) : view === "products" ? (
-          <ProductsView
-            products={products}
-            confirmDeleteProductId={confirmDeleteProductId}
-            onAddProduct={addProduct}
-            onDeleteProduct={deleteProduct}
-          />
+          <ProductsView data={data} refresh={refresh} />
+        ) : view === "settings" ? (
+          <SettingsView data={data} refresh={refresh} />
         ) : (
-          <HistoryView orders={orders} />
+          <AuditView data={data} />
         )}
       </main>
     </div>

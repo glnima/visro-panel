@@ -1,18 +1,20 @@
-// NOTE: daysAgo uses toISOString() (UTC), so between 00:00 and 03:30 in Iran
-// it returns yesterday. Kept as in the prototype; fixed in Phase 1.
-export function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-
-export function daysFromNow(n: number): string {
-  return daysAgo(-n);
-}
+import { APP_TIMEZONE } from "./dates";
 
 export function faDate(dateStr: string): string {
   try {
-    return new Intl.DateTimeFormat("fa-IR", { day: "numeric", month: "long" }).format(new Date(dateStr + "T00:00:00"));
+    return new Intl.DateTimeFormat("fa-IR", { day: "numeric", month: "long", timeZone: "UTC" }).format(
+      new Date(dateStr + "T00:00:00Z")
+    );
+  } catch {
+    return dateStr;
+  }
+}
+
+export function faDateFull(dateStr: string): string {
+  try {
+    return new Intl.DateTimeFormat("fa-IR", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(
+      new Date(dateStr + "T00:00:00Z")
+    );
   } catch {
     return dateStr;
   }
@@ -20,7 +22,9 @@ export function faDate(dateStr: string): string {
 
 export function faTime(isoStr: string): string {
   try {
-    return new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" }).format(new Date(isoStr));
+    return new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: APP_TIMEZONE }).format(
+      new Date(isoStr)
+    );
   } catch {
     return "";
   }
@@ -35,5 +39,14 @@ export function faDigits(n: number | string): string {
 }
 
 export function faPrice(n: number | string): string {
-  return Number(n).toLocaleString("fa-IR", { maximumFractionDigits: 2 });
+  return Number(n).toLocaleString("fa-IR", { maximumFractionDigits: 0 });
+}
+
+// Accepts Persian, Arabic or Latin digits; returns NaN for anything else.
+export function parseDigits(s: string): number {
+  const latin = s
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[,٬،\s]/g, "");
+  return /^\d+$/.test(latin) ? Number(latin) : NaN;
 }

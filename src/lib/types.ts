@@ -1,48 +1,97 @@
-export const CATEGORIES = [
-  "مبل",
-  "صندلی",
-  "میز ناهارخوری",
-  "میز وسط",
-  "سرویس خواب",
-  "گل میز",
-  "آباژور",
-  "چوب لباسی",
-  "قاب آیینه",
-  "اکسسوری",
-] as const;
+export type Role = "admin" | "store" | "workshop";
 
-export type Category = (typeof CATEGORIES)[number];
-
-export type Product = {
-  id: string; // "P1", "P2", ...
-  name: string;
-  category: Category;
-  price: number; // toman
+export const ROLE_LABELS: Record<Role, string> = {
+  admin: "مدیر",
+  store: "فروشگاه",
+  workshop: "کارگاه",
 };
 
-export type OrderItem = {
-  productId: string;
-  productName: string; // snapshot at order time
-  unitPrice: number; // snapshot at order time
-  qty: number;
-  fabricColor: string;
-  woodColor: string;
+export type User = {
+  id: number;
+  username: string;
+  displayName: string;
+  role: Role;
+  active: boolean;
 };
 
-export type StageKey = "carpentry" | "zirkar" | "rangkar" | "tailor" | "ruyekoob";
+export const STAGES = ["carpentry", "zirkar", "rangkar", "tailor", "ruyekoob"] as const;
+export type StageKey = (typeof STAGES)[number];
 export type StationKey = StageKey | "final";
 
 export type Production = Record<StageKey, boolean>;
 
+export type Station = {
+  key: StationKey;
+  label: string;
+  capacity: number;
+  sort: number;
+};
+
+export type Category = {
+  id: number;
+  name: string;
+  sort: number;
+};
+
+export type Product = {
+  id: number;
+  name: string;
+  categoryId: number;
+  price: number | null; // null when the viewer may not see prices
+  active: boolean;
+};
+
+export type Customer = {
+  id: number;
+  name: string;
+  phone: string;
+  notes: string;
+};
+
+export type OrderItem = {
+  id: number;
+  productId: number | null;
+  productName: string; // snapshot at order time
+  unitPrice: number | null; // snapshot at order time; null when hidden
+  qty: number;
+  fabricColor: string;
+  woodColor: string;
+  production: Production;
+};
+
 export type Order = {
-  id: string; // "SF-1027", ...
+  id: number;
+  code: string; // "SF-1027", ...
+  customerId: number;
   customer: string;
   items: OrderItem[];
-  createdAt: string; // order date, ISO yyyy-mm-dd
+  orderDate: string; // ISO yyyy-mm-dd
   requested: string; // requested delivery date, ISO yyyy-mm-dd
-  registeredAt: string | null; // full ISO timestamp of entry
-  production: Production;
-  delivered: boolean;
+  registeredAt: string; // full ISO timestamp of entry
   deliveredAt: string | null; // ISO yyyy-mm-dd
   notes: string;
+  version: number;
+};
+
+export const MAX_PRODUCTS = 200;
+
+export type Bootstrap = {
+  me: User;
+  version: number;
+  stations: Station[];
+  categories: Category[];
+  products: Product[];
+  customers: Customer[];
+  orders: Order[];
+};
+
+export type OrderEvent = {
+  id: number;
+  at: string;
+  kind: string;
+  stage: StageKey | null;
+  orderCode: string | null;
+  itemName: string | null;
+  user: string | null;
+  details: Record<string, unknown>;
 };

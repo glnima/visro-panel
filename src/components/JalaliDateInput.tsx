@@ -1,66 +1,66 @@
 "use client";
 
-import { daysAgo, faDigits, faNum } from "@/lib/format";
-import { JALALI_MONTHS, daysInJalaliMonth, isoToJalali, jalaliToIso, type JalaliParts } from "@/lib/jalali";
-
-function safeJalaliParts(isoLike: string): JalaliParts {
-  try {
-    const safeIso = isoLike && /^\d{4}-\d{2}-\d{2}$/.test(isoLike) ? isoLike : daysAgo(0);
-    const parts = isoToJalali(safeIso);
-    if (parts.some((n) => !Number.isFinite(n))) throw new Error("bad jalali parts");
-    if (parts[1] < 1 || parts[1] > 12) throw new Error("bad month");
-    return parts;
-  } catch {
-    return isoToJalali(daysAgo(0));
-  }
-}
+import { X } from "lucide-react";
+import { isIsoDate, todayISO } from "@/lib/dates";
+import { faDigits, faNum } from "@/lib/format";
+import { JALALI_MONTHS, daysInJalaliMonth, isoToJalali, jalaliToIso } from "@/lib/jalali";
 
 type Props = {
   value: string;
   onChange: (iso: string) => void;
   className?: string;
+  // When set, "" means "no date" and is shown as such instead of as today.
+  emptyLabel?: string;
 };
 
-export default function JalaliDateInput({ value, onChange, className }: Props) {
-  const [jy, jm, jd] = safeJalaliParts(value);
-  const maxDay = daysInJalaliMonth(jy, jm) || 29;
+export default function JalaliDateInput({ value, onChange, className, emptyLabel }: Props) {
+  const selectCls =
+    "rounded-lg border border-[#D9CDB6] bg-[#FBF8F1] px-2 py-2 text-sm text-[#2B2420] outline-none focus:border-[#9C7A3C]";
+
+  if (emptyLabel !== undefined && !value) {
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(todayISO())}
+        className={selectCls + " text-[#8A7B60] min-w-40 text-right " + (className || "")}
+      >
+        {emptyLabel}
+      </button>
+    );
+  }
+
+  const [jy, jm, jd] = isoToJalali(isIsoDate(value) ? value : todayISO());
+  const maxDay = daysInJalaliMonth(jy, jm);
 
   const set = (ny: number, nm: number, nd: number) => {
-    try {
-      const clampedD = Math.min(Math.max(1, nd), daysInJalaliMonth(ny, nm) || 29);
-      const iso = jalaliToIso(ny, nm, clampedD);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || Number.isNaN(new Date(iso + "T00:00:00").getTime())) {
-        throw new Error("bad iso result");
-      }
-      onChange(iso);
-    } catch {
-      onChange(daysAgo(0));
-    }
+    onChange(jalaliToIso(ny, nm, Math.min(Math.max(1, nd), daysInJalaliMonth(ny, nm))));
   };
 
   const years = [];
   for (let y = jy - 2; y <= jy + 3; y++) years.push(y);
 
-  const selectCls =
-    "rounded-lg border border-[#D9CDB6] bg-[#FBF8F1] px-2 py-2 text-sm text-[#2B2420] outline-none focus:border-[#9C7A3C]";
-
   return (
-    <div className={"flex gap-1.5 " + (className || "")}>
-      <select value={jd} onChange={(e) => set(jy, jm, Number(e.target.value))} className={selectCls + " w-16"}>
+    <div className={"flex gap-1.5 items-center " + (className || "")}>
+      <select aria-label="روز" value={jd} onChange={(e) => set(jy, jm, Number(e.target.value))} className={selectCls + " w-16"}>
         {Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
           <option key={d} value={d}>{faNum(d)}</option>
         ))}
       </select>
-      <select value={jm} onChange={(e) => set(jy, Number(e.target.value), jd)} className={selectCls + " flex-1"}>
+      <select aria-label="ماه" value={jm} onChange={(e) => set(jy, Number(e.target.value), jd)} className={selectCls + " flex-1"}>
         {JALALI_MONTHS.map((m, i) => (
           <option key={i} value={i + 1}>{m}</option>
         ))}
       </select>
-      <select value={jy} onChange={(e) => set(Number(e.target.value), jm, jd)} className={selectCls + " w-20"}>
+      <select aria-label="سال" value={jy} onChange={(e) => set(Number(e.target.value), jm, jd)} className={selectCls + " w-20"}>
         {years.map((y) => (
           <option key={y} value={y}>{faDigits(y)}</option>
         ))}
       </select>
+      {emptyLabel !== undefined && (
+        <button type="button" onClick={() => onChange("")} aria-label="پاک کردن تاریخ" className="text-[#8A7B60] hover:text-[#8A3C2F]">
+          <X size={16} />
+        </button>
+      )}
     </div>
   );
 }

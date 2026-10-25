@@ -4,80 +4,104 @@ Mizan connects a furniture **store** (where orders are taken) with the **worksho
 
 The UI is Persian, right-to-left, and uses the Jalali (Persian) calendar.
 
-> **Status:** Phase 0 done. The prototype (`legacy/mizan-v43.jsx`, originally a single-file React artifact in Claude) has been ported as-is to Next.js + TypeScript in `src/`. Its known issues are deliberately kept for now and get fixed in Phase 1. This repo is where it gets turned into a real, production-ready app, one part at a time.
+> **Status:** Phases 0–4 of the roadmap are done. The original prototype is kept untouched in `legacy/mizan-v43.jsx` for reference.
 
-## Running locally
+---
 
-Requires Node 24.
+## 1. Quick start (on your own computer)
+
+Requires **Node 22 or newer**. No database to install: locally the app uses an embedded Postgres stored in `./.data/`.
 
 ```bash
 npm install
-npm run dev     # http://localhost:3000
-npm test        # unit tests (Vitest)
-npm run lint
-npm run build
+npm run db:seed -- --with-demo-users   # optional: demo orders + users admin/store/workshop (password demo1234)
+npm run dev                            # http://localhost:3000
 ```
 
-Until Phase 2 adds a backend, data is kept in the browser's `localStorage` (`src/lib/storage.ts`), so it's shared between tabs of the same browser only, not between people.
+Without the seed, the first visit asks you to create the admin account.
 
-**Layout:**
-- `src/lib/`: framework-free logic (`jalali.ts`, `format.ts`, `production.ts`, `sanitize.ts`, `seed.ts`, `storage.ts`) plus two small hooks.
-- `src/components/`: `MizanApp.tsx` (state and actions) and one component per tab.
-- `legacy/`: the original prototype, untouched, kept as a reference.
+> Stop `npm run dev` before running `npm run db:seed`. The embedded database can only be opened by one process, and the seed script refuses to run while the app has it open.
 
----
+Other commands:
 
-## 1. What the prototype does today
-
-The app has four tabs.
-
-### 1.1 Store — فروشگاه
-- **New order form**
-  - Customer name (نام مشتری)
-  - Order date (تاریخ سفارش), using a Jalali date picker
-  - Requested delivery date (تاریخ تحویل), defaulting to today + 14 days
-  - **Cart of models:** each line has a product, quantity, fabric color (رنگ پارچه) and wood color/type (رنگ / نوع چوب). The same product with the same colors merges into one line.
-  - Notes (توضیحات بیشتر)
-  - Two submit buttons:
-    - **ثبت سفارش (Register order):** goes into production with all stages empty.
-    - **ثبت سفارش آماده (Register ready order):** for showroom stock. It skips production and goes straight to *Final delivery*.
-- **Order ledger**
-  - Shows undelivered orders first, newest first.
-  - Each order shows its customer, ID, item summary, total price (toman), colors, order date and time, delivery date, current station, a status badge, a link to the workshop view, and a delete button (click twice to confirm).
-  - Prices are shown only in the Store and Products tabs.
-
-### 1.2 Workshop — کارگاه تولید
-- A capacity card per station with a progress bar: green under 60%, amber from 60%, red at 100% or more.
-- A red banner appears when any station is at or over capacity.
-- A kanban column per station. Each card shows the order, colors, notes, a **"<station> تمام شد"** (stage done) button, or **ثبت تحویل** (register delivery) in the final column.
-- **Last-blocker highlight:** if an order is waiting on only one of finishing, painting or tailoring, that card is shown in purple with the label "فقط منتظر همینه".
-
-### 1.3 Products — محصولات
-- Add a model with a name, a category, and a price in toman.
-- Delete a model (click twice to confirm). Existing orders keep the product name and price they were created with, as a snapshot.
-
-### 1.4 History — تاریخچه
-- Lists delivered orders.
-- Search by customer name and filter by delivery date range (from / to).
+```bash
+npm test        # unit + API tests (Vitest, in-memory database)
+npm run lint
+npm run build && npm start   # production build
+```
 
 ---
 
-## 2. Domain glossary
+## 2. Putting it online for employees
 
-| Persian | Key | English | Default capacity |
-|---|---|---|---|
-| نجاری | `carpentry` | Carpentry (frame) | 6 |
-| زیرکار | `zirkar` | Pre-finish / sanding & prep | 4 |
-| رنگکار | `rangkar` | Painting / finishing | 4 |
-| خیاط | `tailor` | Tailoring (fabric cutting & sewing) | 4 |
-| رویه‌کوب | `ruyekoob` | Upholstery | 3 |
-| تحویل نهایی | `final` | Final delivery (ready to hand over) | 8 |
+Every employee needs their own login (Settings → Users). Choose one of the three options below.
 
-Product categories: مبل (sofa), صندلی (chair), میز ناهارخوری (dining table), میز وسط (coffee table), سرویس خواب (bedroom set), گل میز (side table), آباژور (lamp), چوب لباسی (coat stand), قاب آیینه (mirror frame), اکسسوری (accessory).
+### Option A — Railway (recommended)
+
+Railway runs the app and its Postgres database in one project, and the app is a normal long-running server.
+
+1. Push this repo to GitHub.
+2. In Railway: **New Project → Deploy from GitHub repo** → pick this repo.
+3. In the same project: **+ New → Database → PostgreSQL**.
+4. Open the app service → **Variables** → add `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (Railway offers it as a reference variable).
+5. **Settings → Networking → Generate Domain**. Optionally set the health check path to `/api/health`.
+6. Open the domain, create the admin account, then add employees under **تنظیمات → کاربران**.
+
+Railway detects Next.js and runs `npm run build` / `npm start` on its own. Tables are created automatically on first start. Turn on Railway's Postgres backups.
+
+### Option B — Vercel + a hosted Postgres
+
+1. Import the repo in Vercel.
+2. Add a Postgres database from the Vercel Marketplace (Neon or Supabase) and connect it to the project, so `DATABASE_URL` is set. If the provider gives a *pooled* URL, use that one.
+3. Optionally set `DATABASE_POOL_SIZE=1`, since each serverless instance opens its own connections.
+4. Deploy, open the URL, and create the admin account.
+
+Every pull request gets its own preview URL. Point previews at a separate database so test clicks don't touch real orders.
+
+### Option C — A PC in the shop (no cloud)
+
+On one always-on computer in the shop network:
+
+```bash
+npm install && npm run build
+npm start -- -H 0.0.0.0 -p 3000
+```
+
+Employees open `http://<that-computer's-IP>:3000` on their phones or PCs, over the same Wi-Fi. Data lives in `./.data/` on that computer, so **back that folder up**. This option works only inside the shop network, unless you add a tunnel or VPN.
+
+**Safety switch:** on Railway, Vercel, Render or Fly the app refuses to start without `DATABASE_URL`. Cloud disks are wiped on redeploy, and orders must not silently end up there.
 
 ---
 
-## 3. Production flow (business rules)
+## 3. Roles
+
+| Role | Sees | Can do |
+|---|---|---|
+| **فروشگاه (store)** | Store, Workshop (read-only), Customers, History, Reports — with prices | Create / edit / delete orders, manage customers, mark delivery |
+| **کارگاه (workshop)** | Workshop, History — **no prices, no customer list** (the server never sends them) | Mark stages done / undo, mark delivery, print workshop sheets |
+| **مدیر (admin)** | Everything | All of the above, plus products, stations & capacities, categories, users, activity log |
+
+Every change is recorded in the activity log (رویدادها) with who did it and when.
+
+---
+
+## 4. What the app does
+
+- **Store** — new order form: customer (autocompletes from the customer list; new names are added automatically), order date, promised delivery date, items (model, quantity, fabric colour, wood colour), notes. "ثبت سفارش آماده" skips production for showroom stock. The list of open orders supports search, edit, print, "jump to workshop", and delete with undo.
+- **Workshop** — capacity bar per station (green under 60%, amber from 60%, red at 100%+) and a red banner when a station is full. **Each item has its own card** and moves through the stations on its own. The whole order reaches *Final delivery* once every item is finished. Each card has a "done" button, a per-stage editor, and a printable sheet. Every stage change and delivery can be undone from the toast. On phones, one station is shown at a time.
+- **Customers** — list with phone and notes, order count, total spent, and order history per customer.
+- **History** — delivered orders, with search and a from/to date filter (empty means "any date"). Shows when a delivery was late and can return an order to the workshop.
+- **Reports** — sales, on-time delivery rate, average delay and currently overdue orders for any date range, plus sales by Jalali month and work completed per station.
+- **Products** (admin) — add / edit / remove models (up to 200 active). Prices are whole tomans. Existing orders keep the name and price they were sold at.
+- **Settings** (admin) — station names and capacities, product categories, users and roles.
+- **Activity log** (admin) — the last 300 actions: who, what and when.
+- **Print sheet** — `/print/SF-xxxx`: an A4 workshop sheet without prices, with a tick box per stage per item and signature lines.
+
+Changes made by one person appear for everyone within about 3 seconds.
+
+---
+
+## 5. Production flow (business rules)
 
 ```
                 ┌──► زیرکار (zirkar) ──┐
@@ -88,151 +112,128 @@ Product categories: مبل (sofa), صندلی (chair), میز ناهارخوری
    (runs in parallel from day one)
 ```
 
-The rules below describe how the code decides which station column an order appears in.
+These rules apply **per item**. One rule set, in `src/lib/production.ts`, drives the board, the status text and the server-side checks.
 
-- If carpentry is not done, the order is in **carpentry**.
-- If carpentry is done, the order is in **zirkar** if zirkar isn't done, and in **rangkar** if rangkar isn't done. It can be in both at once.
-- If tailor is not done, the order is in **tailor**, in parallel with the above.
-- When carpentry, zirkar, rangkar and tailor are all done and ruyekoob is not, the order is in **ruyekoob**.
-- When ruyekoob is done, the order is in **final**, until someone presses "register delivery".
-- One order can therefore appear in up to three columns at the same time.
+- An item is in **carpentry** until carpentry is done. After that it's in **zirkar** and/or **rangkar** until each is done.
+- It's in **tailor** until tailoring is done, in parallel with the above.
+- When those four are done, it's in **ruyekoob**.
+- When **every** item of an order has finished ruyekoob, the order is in **final** until someone registers delivery.
+- The server rejects stages done out of order (zirkar before carpentry, for example). It also rejects undoing a stage that a later stage depends on.
+- **Last blocker (purple):** the card is the only thing anyone can still work on before upholstery.
 
-**Status badge (current logic):**
-- Delivered: blue.
-- Otherwise the badge counts days since the **order date** against a fixed 30-day target:
-  - 0–10 days: green
-  - 11–20 days: amber
-  - 21–30 days: red
-  - more than 30 days: red, showing "N days late"
+**Status badge** — measured against the **promised delivery date**:
+- more than 3 days left: green "N روز مونده"
+- 1–3 days left: amber
+- due today: amber "امروز تحویل"
+- past the promised date: red "N روز تأخیر"
+- delivered: blue, noting how many days late if it was late
+
+All "today" calculations use Tehran time (`NEXT_PUBLIC_APP_TIMEZONE`, default `Asia/Tehran`), whatever timezone the server is in.
 
 ---
 
-## 4. Data model (as in the prototype)
+## 6. Architecture
 
-```ts
-type Product = {
-  id: string;          // "P1", "P2", ...
-  name: string;
-  category: Category;  // one of the categories above
-  price: number;       // toman
-};
+- **Next.js 16** (App Router) + TypeScript + Tailwind 4, Vazirmatn font, lucide-react icons.
+- **API:** a single route handler, `src/app/api/[...path]/route.ts` → `src/server/api.ts`. A small router with a role check on every route. Every write runs in one transaction and is written to the activity log.
+- **Database:** Postgres through the `pg` driver when `DATABASE_URL` is set, otherwise embedded PGlite (`src/server/db.ts`). Migrations live in `src/server/migrations.ts` and run automatically at startup.
+- **Sync:** clients poll `/api/version` every 3 s and reload only when something changed. This works on any host, serverless included.
+- **Auth:** username + password (scrypt), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
+- **Concurrency:** order codes come from a Postgres sequence. Stage changes lock the order row. Editing an order sends the version you started from, and the server rejects the save (409) if someone changed the order in the meantime.
 
-type OrderItem = {
-  productId: string;
-  productName: string; // snapshot at order time
-  unitPrice: number;   // snapshot at order time
-  qty: number;
-  fabricColor: string;
-  woodColor: string;
-};
+Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item), `order_events` (activity log), `app_meta` (change counter).
 
-type Production = {
-  carpentry: boolean;
-  zirkar: boolean;
-  rangkar: boolean;
-  tailor: boolean;
-  ruyekoob: boolean;
-};
-
-type Order = {
-  id: string;               // "SF-1027", ...
-  customer: string;
-  items: OrderItem[];
-  createdAt: string;        // order date, ISO yyyy-mm-dd
-  requested: string;        // requested delivery date, ISO yyyy-mm-dd
-  registeredAt: string|null;// full ISO timestamp of entry
-  production: Production;
-  delivered: boolean;
-  deliveredAt: string|null; // ISO yyyy-mm-dd
-  notes: string;
-};
+```
+src/
+  app/            page, print page, API route
+  components/     one component per tab + shared UI
+  lib/            shared logic (dates, Jalali, production rules, formatting, types)
+  server/         API, auth, database, migrations, demo seed
+scripts/seed.mts  npm run db:seed
+legacy/           original prototype (reference only)
 ```
 
-**Storage today:** two JSON blobs, `mizan:orders` and `mizan:products`, kept in Claude's artifact shared storage (`window.storage`). They are polled every 4 seconds to pick up changes from other people. There is no backend and no login.
+---
 
-**Legacy support:** `sanitizeOrders` and `sanitizeItems` convert old single-product orders into the newer multi-item format.
+## 7. Domain glossary
+
+| Persian | Key | English | Default capacity |
+|---|---|---|---|
+| نجاری | `carpentry` | Carpentry (frame) | 6 |
+| زیرکار | `zirkar` | Pre-finish / sanding & prep | 4 |
+| رنگکار | `rangkar` | Painting / finishing | 4 |
+| خیاط | `tailor` | Tailoring (fabric cutting & sewing) | 4 |
+| رویه‌کوب | `ruyekoob` | Upholstery | 3 |
+| تحویل نهایی | `final` | Final delivery (ready to hand over) | 8 |
+
+Station names and capacities, and the product categories, can be changed in Settings.
 
 ---
 
-## 5. Known issues in the prototype
+## 8. Prototype issues — all resolved
 
-### Critical (must fix before real use)
-- [ ] **Lost updates:** the whole orders array is overwritten on every save (last write wins). Two people editing at once silently lose changes.
-- [ ] **Duplicate IDs:** `nextId()` is computed in the browser, so two users can create the same `SF-xxxx`.
-- [ ] **No authentication:** anyone with the link can view prices, delete orders, or press **"Reset demo data"**, which wipes everything.
-- [ ] **No undo:** "stage done", delivery and delete can't be reversed.
-- [ ] **No order editing:** customer, items, dates and notes can't be changed after an order is created.
+**Critical**
+- [x] Lost updates (whole-list overwrite): each change now updates only its own records, inside a transaction.
+- [x] Duplicate IDs: order codes come from a database sequence.
+- [x] No authentication: logins and roles are in place, and "Reset demo data" is gone from the app (`npm run db:seed` replaces it).
+- [x] No undo: stage changes, deliveries, deletes and product removals can be undone.
+- [x] No order editing: orders can be edited, with protection against overwriting someone else's change.
 
-### Logic bugs
-- [ ] Lateness is based on order date + 30 days and ignores the requested delivery date. An order past its promised date can still look green.
-- [ ] Dates use `toISOString()`, which is UTC. In Iran (UTC+3:30), anything entered between 00:00 and 03:30 gets yesterday's date.
-- [ ] History filters: an empty "from / to" filter still *displays* today's date in the Jalali picker, which is misleading.
-- [ ] Success and error messages render twice: as a top banner and inline next to the buttons.
-- [ ] "Up to 200 models" is mentioned in the UI but not enforced.
-- [ ] The price input allows decimals (`step=0.01`), which doesn't fit toman.
-- [ ] The last-blocker highlight only considers zirkar, rangkar and tailor, not carpentry.
-- [ ] `currentStationText` says "رویه‌کوب" when zirkar, rangkar and tailor are done but carpentry isn't, while the workshop board puts the same order in carpentry. The UI can't produce this state, but bad or legacy data can.
-- [ ] The 4-second poll can overwrite a change you just made if it arrives before your save finishes (same root cause as *Lost updates*).
-- [ ] The order ledger sorts by order date only, so orders from the same day come out in arbitrary order. `registeredAt` could break ties.
+**Logic bugs**
+- [x] Lateness now uses the promised delivery date.
+- [x] Dates use Tehran local time, not UTC.
+- [x] An empty History filter shows "هر تاریخی" instead of today.
+- [x] Messages appear once, in a single toast.
+- [x] The 200-model limit is enforced on the server.
+- [x] Prices are whole tomans; Persian digits and thousand separators are accepted.
+- [x] The last-blocker highlight covers carpentry.
+- [x] The status text and the board can't disagree: both come from the same rules, and the server rejects impossible states.
+- [x] A slow save can no longer be overwritten by the next refresh, because the client only reloads from the server.
+- [x] Same-day orders are sorted by the exact entry time.
 
-### Hardcoded / missing
-- [ ] Station capacities are hardcoded.
-- [ ] Product categories are hardcoded.
-- [ ] There is no customer list; the customer is free text on every order.
-- [ ] There is no per-item production tracking; the whole order moves as one unit.
-- [ ] There are no reports (revenue, throughput, on-time rate).
-
----
-
-## 6. Roadmap (one part at a time)
-
-### Phase 0 — Repo setup
-- [x] Import the prototype as `legacy/mizan-v43.jsx` and keep it untouched as a reference.
-- [x] Scaffold the app (Next.js + TypeScript + Tailwind) with RTL and the Vazirmatn font.
-- [x] Split the single file into modules: `lib/jalali.ts`, `lib/format.ts` (fa digits, price, dates), `lib/production.ts` (routing and status rules), and components per tab.
-- [x] Add unit tests for the Jalali conversion and production routing.
-
-### Phase 1 — Fix the logic (still local, no backend)
-- [ ] Base status on the **requested delivery date** (days left / days late), and optionally keep "day N of 30" as a secondary indicator.
-- [ ] Use local-time date helpers instead of `toISOString()`.
-- [ ] Fix the History filter's empty state, the duplicate toasts, and the price input.
-- [ ] Add order editing and undo for stage changes.
-
-### Phase 2 — Real backend
-- [ ] Database (e.g. Supabase / Postgres) with tables `products`, `orders`, `order_items`, `stations`, `order_stage_events`.
-- [ ] IDs generated on the server (sequence), and updates per record instead of per blob.
-- [ ] Realtime updates in place of 4-second polling.
-- [ ] Remove "Reset demo data" from production builds and keep it only in a seed script.
-
-### Phase 3 — Users & roles
-- [ ] Login.
-- [ ] Roles: **store** (orders and prices), **workshop** (stations, no prices), **admin** (products, capacities, users).
-- [ ] An audit log of who marked each stage done or deleted something, and when.
-
-### Phase 4 — Nice to have
-- [ ] Customer list with order history per customer.
-- [ ] Configurable stations, capacities and categories.
-- [ ] Per-item production tracking.
-- [ ] Reports: on-time delivery rate, station throughput, revenue by period.
-- [ ] Print / PDF order sheet for the workshop.
-- [ ] Mobile-friendly workshop view, so station staff can tap "done" on a phone.
+**Hardcoded / missing**
+- [x] Stations, capacities and categories can be edited.
+- [x] Customer list.
+- [x] Per-item production tracking.
+- [x] Reports.
 
 ---
 
-## 7. Suggested stack
+## 9. Roadmap
 
-- **Frontend:** Next.js (App Router) + TypeScript + Tailwind CSS + lucide-react
-- **Backend / DB:** Supabase (Postgres, Auth, Realtime), or a similar service
-- **Hosting:** Vercel
-- **Testing:** Vitest for logic, Playwright for key flows
+### Phase 0 — Repo setup ✅
+- [x] Prototype kept in `legacy/`, app scaffolded (Next.js + TypeScript + Tailwind, RTL, Vazirmatn), logic split into modules, unit tests.
+
+### Phase 1 — Fix the logic ✅
+- [x] Status based on the promised date, Tehran-local dates, History filter, single toast, whole-toman prices, order editing, undo.
+
+### Phase 2 — Real backend ✅
+- [x] Postgres with `products`, `orders`, `order_items`, `stations`, `order_events` (plus users, sessions, customers, categories).
+- [x] Server-generated IDs, per-record updates.
+- [x] Live updates: polling a change counter every 3 s, so only changes are reloaded. This works on serverless hosts too; real push (SSE / WebSocket) is a possible later upgrade.
+- [x] Demo data only through `npm run db:seed`.
+
+### Phase 3 — Users & roles ✅
+- [x] Login, roles store / workshop / admin, activity log.
+
+### Phase 4 — Nice to have ✅
+- [x] Customer list with order history.
+- [x] Configurable station names and capacities, and categories. The order of the stages stays fixed, because the business rules depend on it.
+- [x] Per-item production tracking.
+- [x] Reports: on-time rate, station throughput, sales by month.
+- [x] Printable workshop sheet.
+- [x] Mobile-friendly workshop view.
+
+### Possible next steps
+- Push updates (SSE) instead of polling.
+- Export reports to Excel.
+- SMS to the customer when an order is ready.
+- Photos and attachments per order.
 
 ---
 
-## 8. Design notes from the prototype
+## 10. Design notes
 
-- **Palette:**
-  - Walnut / cream: `#3B241A` header, `#EDE6D6` page background, `#F7F2E7` cards, `#9C7A3C` brass accent.
-  - Status colors: green `#16A34A`, amber `#D97706`, red `#DC2626`, blue `#2563EB`.
-  - Last-blocker purple: `#8B5CF6` border on `#F3E8FF`.
+- **Palette:** walnut / cream — `#3B241A` header, `#EDE6D6` page background, `#F7F2E7` cards, `#9C7A3C` brass accent. Status colours: green `#16A34A`, amber `#D97706`, red `#DC2626`, blue `#2563EB`. Last blocker: purple `#8B5CF6` border on `#F3E8FF`.
 - **Font:** Vazirmatn.
-- **Language:** all user-facing text is Persian, in an informal and friendly tone (e.g. "دوباره بزن"). All numbers are shown in Persian digits.
+- **Language:** all user-facing text is Persian, in an informal and friendly tone (e.g. "دوباره بزن"). Numbers are shown in Persian digits.
