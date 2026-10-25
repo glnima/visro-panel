@@ -4,7 +4,26 @@ Mizan connects a furniture **store** (where orders are taken) with the **worksho
 
 The UI is Persian, right-to-left, and uses the Jalali (Persian) calendar.
 
-> **Status:** concept / prototype (`mizan-v43-readytofinal.jsx`), originally built as a single-file React artifact in Claude. This repo is where it gets turned into a real, production-ready app, one part at a time.
+> **Status:** Phase 0 done. The prototype (`legacy/mizan-v43.jsx`, originally a single-file React artifact in Claude) has been ported as-is to Next.js + TypeScript in `src/`. Its known issues are deliberately kept for now and get fixed in Phase 1. This repo is where it gets turned into a real, production-ready app, one part at a time.
+
+## Running locally
+
+Requires Node 24.
+
+```bash
+npm install
+npm run dev     # http://localhost:3000
+npm test        # unit tests (Vitest)
+npm run lint
+npm run build
+```
+
+Until Phase 2 adds a backend, data is kept in the browser's `localStorage` (`src/lib/storage.ts`), so it's shared between tabs of the same browser only, not between people.
+
+**Layout:**
+- `src/lib/`: framework-free logic (`jalali.ts`, `format.ts`, `production.ts`, `sanitize.ts`, `seed.ts`, `storage.ts`) plus two small hooks.
+- `src/components/`: `MizanApp.tsx` (state and actions) and one component per tab.
+- `legacy/`: the original prototype, untouched, kept as a reference.
 
 ---
 
@@ -168,10 +187,10 @@ type Order = {
 ## 6. Roadmap (one part at a time)
 
 ### Phase 0 — Repo setup
-- [ ] Import the prototype as `legacy/mizan-v43.jsx` and keep it untouched as a reference.
-- [ ] Scaffold the app (Next.js + TypeScript + Tailwind) with RTL and the Vazirmatn font.
-- [ ] Split the single file into modules: `lib/jalali.ts`, `lib/format.ts` (fa digits, price, dates), `lib/production.ts` (routing and status rules), and components per tab.
-- [ ] Add unit tests for the Jalali conversion and production routing.
+- [x] Import the prototype as `legacy/mizan-v43.jsx` and keep it untouched as a reference.
+- [x] Scaffold the app (Next.js + TypeScript + Tailwind) with RTL and the Vazirmatn font.
+- [x] Split the single file into modules: `lib/jalali.ts`, `lib/format.ts` (fa digits, price, dates), `lib/production.ts` (routing and status rules), and components per tab.
+- [x] Add unit tests for the Jalali conversion and production routing.
 
 ### Phase 1 — Fix the logic (still local, no backend)
 - [ ] Base status on the **requested delivery date** (days left / days late), and optionally keep "day N of 30" as a secondary indicator.
