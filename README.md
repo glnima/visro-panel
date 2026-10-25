@@ -152,6 +152,9 @@ type Order = {
 - [ ] "Up to 200 models" is mentioned in the UI but not enforced.
 - [ ] The price input allows decimals (`step=0.01`), which doesn't fit toman.
 - [ ] The last-blocker highlight only considers zirkar, rangkar and tailor, not carpentry.
+- [ ] `currentStationText` says "رویه‌کوب" when zirkar, rangkar and tailor are done but carpentry isn't, while the workshop board puts the same order in carpentry. The UI can't produce this state, but bad or legacy data can.
+- [ ] The 4-second poll can overwrite a change you just made if it arrives before your save finishes (same root cause as *Lost updates*).
+- [ ] The order ledger sorts by order date only, so orders from the same day come out in arbitrary order. `registeredAt` could break ties.
 
 ### Hardcoded / missing
 - [ ] Station capacities are hardcoded.
