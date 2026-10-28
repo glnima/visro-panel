@@ -5,7 +5,9 @@ import type { Queryable } from "./db";
 const subtle = globalThis.crypto.subtle;
 
 export const SESSION_COOKIE = "mizan_session";
-export const SESSION_DAYS = 30;
+// Long-lived and sliding: every day the app is used, the session (and cookie)
+// is pushed out again, so people who use it regularly never have to log in again.
+export const SESSION_DAYS = 180;
 const PBKDF2_ITERATIONS = 210_000;
 
 const toB64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
@@ -62,15 +64,23 @@ export async function createSession(q: Queryable, userId: number): Promise<strin
   return token;
 }
 
-export async function userForSession(q: Queryable, token: string | undefined): Promise<User | null> {
+export async function userForSession(q: Queryable, token: string | undefined): Promise<{ user: User; renewed: boolean } | null> {
   if (!token) return null;
-  const rows = await q.query<UserRow>(
-    `select u.id, u.username, u.display_name, u.role, u.active
+  const hash = await sha256(token);
+  const rows = await q.query<UserRow & { stale: boolean }>(
+    `select u.id, u.username, u.display_name, u.role, u.active, s.renewed_at < now() - interval '1 day' as stale
        from sessions s join users u on u.id = s.user_id
       where s.token_hash = $1 and s.expires_at > now() and u.active`,
-    [await sha256(token)]
+    [hash]
   );
-  return rows[0] ? toUser(rows[0]) : null;
+  if (!rows[0]) return null;
+  if (rows[0].stale) {
+    await q.query(
+      "update sessions set expires_at = now() + make_interval(days => $2), renewed_at = now() where token_hash = $1",
+      [hash, SESSION_DAYS]
+    );
+  }
+  return { user: toUser(rows[0]), renewed: rows[0].stale };
 }
 
 export async function deleteSession(q: Queryable, token: string | undefined): Promise<void> {

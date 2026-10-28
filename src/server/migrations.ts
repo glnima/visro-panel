@@ -147,4 +147,22 @@ export const MIGRATIONS: { id: number; sql: string[] }[] = [
       `create index item_delays_open_idx on item_delays(item_id) where resolved_at is null`,
     ],
   },
+  {
+    id: 4,
+    sql: [
+      // one row per browser/device that allowed notifications
+      `create table push_subscriptions (
+        id serial primary key,
+        user_id int not null references users(id) on delete cascade,
+        endpoint text not null unique,
+        p256dh text not null,
+        auth text not null,
+        user_agent text not null default '',
+        created_at timestamptz not null default now()
+      )`,
+      // small key/value store, e.g. the auto-generated VAPID keys
+      `create table app_settings (key text primary key, value text not null)`,
+      `alter table sessions add column renewed_at timestamptz not null default now()`,
+    ],
+  },
 ];

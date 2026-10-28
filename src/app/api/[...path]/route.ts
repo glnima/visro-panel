@@ -1,4 +1,5 @@
 import "@/server/db-node";
+import "@/server/push-node";
 import { handle } from "@/server/api";
 
 const run = (req: Request) => handle(req);

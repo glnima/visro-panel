@@ -5,8 +5,22 @@ import { LogIn } from "lucide-react";
 import MizanApp from "./MizanApp";
 import { ToastProvider } from "./Toast";
 import { inputCls, labelCls, primaryBtn } from "./ui";
+import { InstallButton } from "./AppInstall";
 import { ApiError, DEMO, REPO_URL, UNAUTHORIZED_EVENT, api, errorMessage } from "@/lib/api";
+import { disablePush, enablePush, registerServiceWorker } from "@/lib/pwa";
 import { ROLES, ROLE_LABELS, type User } from "@/lib/types";
+
+// Offer to save the login in the browser / phone password manager (Chromium;
+// Safari and Firefox pick it up from the form's autocomplete attributes).
+function rememberLogin(username: string, password: string, name: string) {
+  const PC = (
+    window as unknown as {
+      PasswordCredential?: new (d: { id: string; password: string; name: string }) => Credential;
+    }
+  ).PasswordCredential;
+  if (!PC || !username || !password) return;
+  navigator.credentials.store(new PC({ id: username, password, name })).catch(() => {});
+}
 
 type Session = { me: User | null; needsSetup: boolean };
 
@@ -21,6 +35,10 @@ export default function AuthGate() {
     } catch (e) {
       setError(errorMessage(e));
     }
+  }, []);
+
+  useEffect(() => {
+    registerServiceWorker();
   }, []);
 
   useEffect(() => {
@@ -66,6 +84,8 @@ export default function AuthGate() {
       <MizanApp
         me={session.me}
         onLogout={async () => {
+          // a shared shop tablet shouldn't keep getting the previous person's notifications
+          await disablePush().catch(() => {});
           await api("POST", "/api/logout").catch(() => {});
           setSession({ me: null, needsSetup: false });
         }}
@@ -76,13 +96,18 @@ export default function AuthGate() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4">
-      <div className="mb-6 text-center">
-        <div className="text-3xl font-bold text-[#3B241A]">میزان</div>
-        <div className="text-xs text-[#6B5E4F] mt-1">هماهنگی فروش و تولید مبل</div>
+    <ToastProvider>
+      <div className="min-h-screen flex flex-col items-center justify-center px-4">
+        <div className="mb-6 text-center">
+          <div className="text-3xl font-bold text-[#3B241A]">میزان</div>
+          <div className="text-xs text-[#6B5E4F] mt-1">هماهنگی فروش و تولید مبل</div>
+        </div>
+        <div className="w-full max-w-sm rounded-2xl border border-[#D9CDB6] bg-[#F7F2E7] p-6 shadow-sm">{children}</div>
+        <div className="mt-4">
+          <InstallButton compact />
+        </div>
       </div>
-      <div className="w-full max-w-sm rounded-2xl border border-[#D9CDB6] bg-[#F7F2E7] p-6 shadow-sm">{children}</div>
-    </div>
+    </ToastProvider>
   );
 }
 
@@ -101,8 +126,11 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
       const { me } = await api<{ me: User }>(
         "POST",
         setup ? "/api/setup" : "/api/login",
-        setup ? { username, displayName, password } : as ?? { username, password }
+        setup ? { username, displayName, password } : (as ?? { username, password }),
       );
+      rememberLogin(username, password, me.displayName);
+      // this device already allowed notifications: subscribe it for the person who just logged in
+      if (!DEMO && "Notification" in window && Notification.permission === "granted") enablePush().catch(() => {});
       onDone(me);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : errorMessage(err));
@@ -116,8 +144,7 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
       {DEMO && !setup && (
         <div className="rounded-lg bg-[#FEF3C7] border border-[#FCD34D] p-3 text-xs text-[#78350F]">
           <div className="mb-2">
-            این نسخه‌ی نمایشیه. با یکی از نقش‌ها وارد شو و همه‌چیز رو امتحان کن — داده‌ها فقط توی مرورگر خودت می‌مونه.
-            {" "}
+            این نسخه‌ی نمایشیه. با یکی از نقش‌ها وارد شو و همه‌چیز رو امتحان کن — داده‌ها فقط توی مرورگر خودت می‌مونه.{" "}
             <a href={REPO_URL} target="_blank" rel="noreferrer" className="underline">
               کد پروژه
             </a>
@@ -146,12 +173,25 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
       )}
       <label className={labelCls}>
         نام کاربری
-        <input dir="ltr" autoCapitalize="none" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} className={inputCls} />
+        <input
+          dir="ltr"
+          autoCapitalize="none"
+          autoComplete="username"
+          name="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          className={inputCls}
+        />
       </label>
       {setup && (
         <label className={labelCls}>
           نام نمایشی
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="مثلاً مدیر فروشگاه" className={inputCls} />
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="مثلاً مدیر فروشگاه"
+            className={inputCls}
+          />
         </label>
       )}
       <label className={labelCls}>
@@ -160,6 +200,7 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
           dir="ltr"
           type="password"
           autoComplete={setup ? "new-password" : "current-password"}
+          name="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           className={inputCls}

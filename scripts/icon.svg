@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Mizan (میزان = balance scale): brass scale on walnut. Full-bleed so it also works as a maskable icon. -->
+  <rect width="512" height="512" fill="#3B241A"/>
+  <g fill="none" stroke="#D4B26A" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 140 V368"/>
+    <path d="M150 180 H362"/>
+    <path d="M150 180 L112 272"/>
+    <path d="M150 180 L188 272"/>
+    <path d="M362 180 L324 272"/>
+    <path d="M362 180 L400 272"/>
+    <path d="M196 368 H316"/>
+  </g>
+  <g fill="#D4B26A">
+    <circle cx="256" cy="128" r="20"/>
+    <path d="M100 272 H200 A50 50 0 0 1 100 272 Z"/>
+    <path d="M312 272 H412 A50 50 0 0 1 312 272 Z"/>
+  </g>
+</svg>

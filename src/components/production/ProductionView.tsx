@@ -38,9 +38,9 @@ function savedView(fallback: View): View {
   }
 }
 
-type Props = { data: Bootstrap; refresh: () => Promise<void>; highlightId: number | null };
+type Props = { data: Bootstrap; refresh: () => Promise<void>; highlightId: number | null; openOrderId?: number | null };
 
-export default function ProductionView({ data, refresh, highlightId }: Props) {
+export default function ProductionView({ data, refresh, highlightId, openOrderId }: Props) {
   const { me, stations } = data;
   const ownStage = isStationRole(me.role) ? me.role : null;
   const actions = useProductionActions(data, refresh);
@@ -49,7 +49,7 @@ export default function ProductionView({ data, refresh, highlightId }: Props) {
   const [quick, setQuick] = useState<Quick>("all");
   const [query, setQuery] = useState("");
   const [stageDialog, setStageDialog] = useState<{ orderId: number; itemId: number; stage: StageKey; delay?: boolean } | null>(null);
-  const [drawerId, setDrawerId] = useState<number | null>(null);
+  const [drawerId, setDrawerId] = useState<number | null>(openOrderId ?? null);
   const today = todayISO();
 
   const setView = (v: View) => {
