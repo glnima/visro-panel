@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
 import { Printer } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { faDateFull, faNum, faTime } from "@/lib/format";
@@ -9,7 +8,8 @@ import { STAGES, type Order, type Station } from "@/lib/types";
 
 // A4 order sheet for the workshop. Never shows prices.
 export default function PrintSheet() {
-  const { code } = useParams<{ code: string }>();
+  // ?code=SF-1234 (a query string, so the page also works as a static file)
+  const [code] = useState(() => new URLSearchParams(window.location.search).get("code") ?? "");
   const [data, setData] = useState<{ order: Order; stations: Station[] } | null>(null);
   const [error, setError] = useState("");
 

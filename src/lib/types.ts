@@ -95,3 +95,16 @@ export type OrderEvent = {
   user: string | null;
   details: Record<string, unknown>;
 };
+
+export type FeedbackKind = "bug" | "idea" | "other";
+
+export type Feedback = {
+  id: number;
+  kind: FeedbackKind;
+  body: string;
+  page: string;
+  done: boolean;
+  at: string;
+  user: string | null;
+  role: Role | null;
+};

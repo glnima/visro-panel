@@ -1,8 +1,9 @@
 import { MIGRATIONS } from "./migrations";
 
-// One tiny query interface over two drivers:
-//  - DATABASE_URL set   → real Postgres via `pg` (production, Railway/Vercel/...)
-//  - DATABASE_URL unset → embedded Postgres via PGlite in ./.data (local dev, tests)
+// One tiny query interface over the drivers. This module is runtime-neutral;
+// the drivers themselves are registered by:
+//  - db-node.ts → `pg` when DATABASE_URL is set, else PGlite files in ./.data (server, scripts)
+//  - demo/      → PGlite in IndexedDB (GitHub Pages demo, runs in the browser)
 
 export type Row = Record<string, unknown>;
 
@@ -17,74 +18,25 @@ export interface Db extends Queryable {
 
 // Dates come back as "yyyy-mm-dd", timestamps as ISO strings and int8 as numbers,
 // whichever driver is in use.
-const parseDate = (v: string) => v;
-const parseTimestamp = (v: string) => new Date(v.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00")).toISOString();
-const parseInt8 = (v: string) => Number(v);
-const OID = { int8: 20, date: 1082, timestamptz: 1184 };
+export const parseDate = (v: string) => v;
+export const parseTimestamp = (v: string) => new Date(v.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00")).toISOString();
+export const parseInt8 = (v: string) => Number(v);
+export const OID = { int8: 20, date: 1082, timestamptz: 1184 };
 
-export async function createPgDb(url: string): Promise<Db> {
-  const pg = await import("pg");
-  const types = pg.default.types;
-  types.setTypeParser(OID.int8, parseInt8);
-  types.setTypeParser(OID.date, parseDate);
-  types.setTypeParser(OID.timestamptz, parseTimestamp);
-  const pool = new pg.default.Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_SIZE || 5) });
-  return {
-    async query(sql, params) {
-      return (await pool.query(sql, params)).rows;
-    },
-    async tx(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("begin");
-        const result = await fn({ query: async (sql, params) => (await client.query(sql, params)).rows });
-        await client.query("commit");
-        return result;
-      } catch (e) {
-        await client.query("rollback");
-        throw e;
-      } finally {
-        client.release();
-      }
-    },
-    close: () => pool.end(),
-  };
-}
+export const PGLITE_PARSERS = {
+  [OID.int8]: (v: string) => parseInt8(v),
+  [OID.date]: (v: string) => parseDate(v),
+  [OID.timestamptz]: (v: string) => parseTimestamp(v),
+};
 
-// PGlite files must only be opened by one process at a time, so a second
-// process (e.g. `npm run db:seed` while `npm run dev` runs) fails loudly.
-async function lockDataDir(dataDir: string): Promise<void> {
-  const { readFile, writeFile } = await import("node:fs/promises");
-  const path = `${dataDir}.lock`;
-  const pid = Number(await readFile(path, "utf8").catch(() => "0"));
-  if (pid && pid !== process.pid) {
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch {
-      alive = false;
-    }
-    if (alive) {
-      throw new Error(`The local database is in use by another process (pid ${pid}). Stop "npm run dev" / "npm start" first.`);
-    }
-  }
-  await writeFile(path, String(process.pid));
-}
+type PgliteLike = {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+  transaction<T>(fn: (tx: { query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> }) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+};
 
-export async function createPgliteDb(dataDir?: string): Promise<Db> {
-  const { PGlite } = await import("@electric-sql/pglite");
-  if (dataDir) {
-    const { mkdir } = await import("node:fs/promises");
-    await mkdir(dataDir, { recursive: true });
-    await lockDataDir(dataDir);
-  }
-  const db = await PGlite.create(dataDir, {
-    parsers: {
-      [OID.int8]: (v: string) => parseInt8(v),
-      [OID.date]: (v: string) => parseDate(v),
-      [OID.timestamptz]: (v: string) => parseTimestamp(v),
-    },
-  });
+// Wraps a PGlite instance (from Node or the browser) in our Db interface.
+export function wrapPglite(db: PgliteLike): Db {
   // PGlite is a single connection, so serialise transactions ourselves.
   let chain: Promise<unknown> = Promise.resolve();
   return {
@@ -115,18 +67,19 @@ export async function migrate(db: Db): Promise<void> {
   });
 }
 
-const g = globalThis as unknown as { __mizanDb?: Promise<Db> };
+type Factory = () => Promise<Db>;
+const g = globalThis as unknown as { __mizanDb?: Promise<Db>; __mizanDbFactory?: Factory };
+
+export function setDbFactory(factory: Factory) {
+  g.__mizanDbFactory = factory;
+}
 
 export function getDb(): Promise<Db> {
   if (!g.__mizanDb) {
+    const factory = g.__mizanDbFactory;
+    if (!factory) return Promise.reject(new Error("No database driver registered"));
     g.__mizanDb = (async () => {
-      const url = process.env.DATABASE_URL;
-      const cloud = ["VERCEL", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_NAME", "RENDER", "FLY_APP_NAME"].find((k) => process.env[k]);
-      if (!url && cloud) {
-        // Cloud disks are wiped on redeploy; never silently store real orders there.
-        throw new Error(`DATABASE_URL is not set (running on ${cloud}). Attach a Postgres database and set DATABASE_URL.`);
-      }
-      const db = url ? await createPgDb(url) : await createPgliteDb(process.env.PGLITE_DIR || "./.data/pglite");
+      const db = await factory();
       await migrate(db);
       return db;
     })();

@@ -99,4 +99,18 @@ export const MIGRATIONS: { id: number; sql: string[] }[] = [
       `insert into app_meta default values`,
     ],
   },
+  {
+    id: 2,
+    sql: [
+      `create table feedback (
+        id serial primary key,
+        user_id int references users(id) on delete set null,
+        kind text not null check (kind in ('bug', 'idea', 'other')),
+        body text not null,
+        page text not null default '',
+        done boolean not null default false,
+        created_at timestamptz not null default now()
+      )`,
+    ],
+  },
 ];

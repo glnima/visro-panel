@@ -5,7 +5,7 @@ import { History, Printer, Search, Undo2 } from "lucide-react";
 import JalaliDateInput from "./JalaliDateInput";
 import { useToast } from "./Toast";
 import { Empty, PageTitle, cardCls, linkBtn } from "./ui";
-import { api, errorMessage } from "@/lib/api";
+import { api, errorMessage, printUrl } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faNum, faPrice, faTime } from "@/lib/format";
 import { orderTotals, statusOf } from "@/lib/production";
@@ -98,7 +98,7 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
                   ثبت سفارش: {faDate(o.orderDate)} — ساعت {faTime(o.registeredAt)} · قول تحویل: {faDate(o.requested)}
                 </span>
                 <div className="flex items-center gap-4">
-                  <a href={`/print/${o.code}`} target="_blank" rel="noreferrer" className={linkBtn}>
+                  <a href={printUrl(o.code)} target="_blank" rel="noreferrer" className={linkBtn}>
                     <Printer size={13} />
                     چاپ
                   </a>

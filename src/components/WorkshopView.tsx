@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, ListChecks, Printer } from "lucide-react";
 import { stationIcons } from "./stationIcons";
 import { useToast } from "./Toast";
 import { PageTitle } from "./ui";
-import { api, errorMessage } from "@/lib/api";
+import { api, errorMessage, printUrl } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faNum } from "@/lib/format";
 import {
@@ -250,7 +250,7 @@ function WorkCard({ card, station, stations, highlighted, canWork, busy, onStage
         ) : (
           <span />
         )}
-        <a href={`/print/${order.code}`} target="_blank" rel="noreferrer" className="text-[11px] text-[#7A5E28] flex items-center gap-1">
+        <a href={printUrl(order.code)} target="_blank" rel="noreferrer" className="text-[11px] text-[#7A5E28] flex items-center gap-1">
           <Printer size={12} />
           برگه‌ی کارگاه
         </a>

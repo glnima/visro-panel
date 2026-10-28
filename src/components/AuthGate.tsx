@@ -5,8 +5,8 @@ import { LogIn } from "lucide-react";
 import MizanApp from "./MizanApp";
 import { ToastProvider } from "./Toast";
 import { inputCls, labelCls, primaryBtn } from "./ui";
-import { ApiError, UNAUTHORIZED_EVENT, api, errorMessage } from "@/lib/api";
-import type { User } from "@/lib/types";
+import { ApiError, DEMO, REPO_URL, UNAUTHORIZED_EVENT, api, errorMessage } from "@/lib/api";
+import { ROLE_LABELS, type Role, type User } from "@/lib/types";
 
 type Session = { me: User | null; needsSetup: boolean };
 
@@ -93,15 +93,15 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async (e: FormEvent | null, as?: { username: string; password: string }) => {
+    e?.preventDefault();
     setBusy(true);
     setError("");
     try {
       const { me } = await api<{ me: User }>(
         "POST",
         setup ? "/api/setup" : "/api/login",
-        setup ? { username, displayName, password } : { username, password }
+        setup ? { username, displayName, password } : as ?? { username, password }
       );
       onDone(me);
     } catch (err) {
@@ -113,6 +113,31 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
       <h1 className="text-sm font-bold">{setup ? "راه‌اندازی — ساخت حساب مدیر" : "ورود"}</h1>
+      {DEMO && !setup && (
+        <div className="rounded-lg bg-[#FEF3C7] border border-[#FCD34D] p-3 text-xs text-[#78350F]">
+          <div className="mb-2">
+            این نسخه‌ی نمایشیه. با یکی از نقش‌ها وارد شو و همه‌چیز رو امتحان کن — داده‌ها فقط توی مرورگر خودت می‌مونه.
+            {" "}
+            <a href={REPO_URL} target="_blank" rel="noreferrer" className="underline">
+              کد پروژه
+            </a>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(["admin", "store", "workshop"] as Role[]).map((r) => (
+              <button
+                key={r}
+                type="button"
+                disabled={busy}
+                onClick={() => submit(null, { username: r, password: "demo1234" })}
+                className="rounded-md bg-[#3B241A] text-[#F3EEE1] px-3 py-1.5 font-medium disabled:opacity-60"
+              >
+                ورود به‌عنوان {ROLE_LABELS[r]}
+              </button>
+            ))}
+          </div>
+          {busy && <div className="mt-2">بار اول چند ثانیه طول می‌کشه تا پایگاه داده توی مرورگر آماده بشه…</div>}
+        </div>
+      )}
       {setup && (
         <p className="text-xs text-[#6B5E4F]">
           اولین بار است که برنامه اجرا می‌شه. حساب مدیر رو بساز؛ بعداً از بخش تنظیمات برای کارمندها حساب جدا بساز.

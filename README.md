@@ -4,7 +4,11 @@ Mizan connects a furniture **store** (where orders are taken) with the **worksho
 
 The UI is Persian, right-to-left, and uses the Jalali (Persian) calendar.
 
-> **Status:** Phases 0–4 of the roadmap are done. The original prototype is kept untouched in `legacy/mizan-v43.jsx` for reference.
+> **Status:** Phases 0–4 of the roadmap are done. We now improve it based on feedback from the people using it. The original prototype is kept untouched in `legacy/mizan-v43.jsx` for reference.
+
+**Try it:** https://glnima.github.io/visro-panel/ is a demo that runs entirely in your browser, with sample data and one-tap logins. Nothing you enter leaves your browser.
+
+**Send feedback:** use the «بازخورد» button in the app, or [open an issue](https://github.com/glnima/visro-panel/issues/new?template=feedback.yml).
 
 ---
 
@@ -15,6 +19,7 @@ Requires **Node 22 or newer**. No database to install: locally the app uses an e
 ```bash
 npm install
 npm run db:seed -- --with-demo-users   # optional: demo orders + users admin/store/workshop (password demo1234)
+                                       # (refused when DATABASE_URL is set: that password is public)
 npm run dev                            # http://localhost:3000
 ```
 
@@ -32,9 +37,29 @@ npm run build && npm start   # production build
 
 ---
 
-## 2. Putting it online for employees
+## 2. Putting it online
 
-Every employee needs their own login (Settings → Users). Choose one of the three options below.
+There are two separate things:
+
+| | GitHub Pages demo | Real app |
+|---|---|---|
+| URL | `https://glnima.github.io/visro-panel/` | your Vercel / Railway domain |
+| Data | each visitor's own browser, sample data, resettable | one shared Postgres database |
+| Logins | demo buttons (password `demo1234`) | real accounts made by the admin |
+| Use it for | showing people, collecting feedback on the design | daily work in the shop |
+| Deploys | automatically on every push to `main` (`.github/workflows/pages.yml`) | automatically on every push to `main` once connected |
+
+### The demo (GitHub Pages)
+
+It's already set up: `.github/workflows/pages.yml` builds with `NEXT_PUBLIC_DEMO=1`. In that build the API (`src/server/api.ts`) runs inside the browser on PGlite stored in IndexedDB (`src/demo/runtime.ts`), so no server is needed. To build it locally:
+
+```bash
+NEXT_PUBLIC_DEMO=1 NEXT_PUBLIC_BASE_PATH=/visro-panel npm run build   # → out/
+```
+
+### The real app
+
+Every employee needs their own login (Settings → Users). Choose one of the options below. For free hosting, Option B with Neon's free tier costs nothing to start.
 
 ### Option A — Railway (recommended)
 
@@ -56,7 +81,7 @@ Railway detects Next.js and runs `npm run build` / `npm start` on its own. Table
 3. Optionally set `DATABASE_POOL_SIZE=1`, since each serverless instance opens its own connections.
 4. Deploy, open the URL, and create the admin account.
 
-Every pull request gets its own preview URL. Point previews at a separate database so test clicks don't touch real orders.
+Every pull request gets its own preview URL. Point previews at a separate database so test clicks don't touch real orders. With Neon, a database *branch* for "Preview" does this.
 
 ### Option C — A PC in the shop (no cloud)
 
@@ -85,6 +110,15 @@ Every change is recorded in the activity log (رویدادها) with who did it 
 
 ---
 
+## 3a. Feedback loop
+
+1. **Employees** press «بازخورد» in the header, pick a type (problem / idea / other) and write a sentence. It's saved in the database, so they don't need a GitHub account.
+2. **The admin** sees it all under the **بازخوردها** tab, marks items as handled, and presses «ثبت در GitHub» to turn one into a pre-filled GitHub Issue.
+3. **Development** happens from those issues. Every pull request runs CI (`.github/workflows/ci.yml`: type-check, lint, tests, build). Merging to `main` updates the demo and the real app.
+4. **Demo visitors** have no shared database, so their «بازخورد» button opens a pre-filled GitHub Issue directly.
+
+---
+
 ## 4. What the app does
 
 - **Store** — new order form: customer (autocompletes from the customer list; new names are added automatically), order date, promised delivery date, items (model, quantity, fabric colour, wood colour), notes. "ثبت سفارش آماده" skips production for showroom stock. The list of open orders supports search, edit, print, "jump to workshop", and delete with undo.
@@ -95,7 +129,8 @@ Every change is recorded in the activity log (رویدادها) with who did it 
 - **Products** (admin) — add / edit / remove models (up to 200 active). Prices are whole tomans. Existing orders keep the name and price they were sold at.
 - **Settings** (admin) — station names and capacities, product categories, users and roles.
 - **Activity log** (admin) — the last 300 actions: who, what and when.
-- **Print sheet** — `/print/SF-xxxx`: an A4 workshop sheet without prices, with a tick box per stage per item and signature lines.
+- **Feedback** — the «بازخورد» button for everyone; admins read it in the **بازخوردها** tab.
+- **Print sheet** — `/print?code=SF-xxxx`: an A4 workshop sheet without prices, with a tick box per stage per item and signature lines.
 
 Changes made by one person appear for everyone within about 3 seconds.
 
@@ -136,12 +171,12 @@ All "today" calculations use Tehran time (`NEXT_PUBLIC_APP_TIMEZONE`, default `A
 
 - **Next.js 16** (App Router) + TypeScript + Tailwind 4, Vazirmatn font, lucide-react icons.
 - **API:** a single route handler, `src/app/api/[...path]/route.ts` → `src/server/api.ts`. A small router with a role check on every route. Every write runs in one transaction and is written to the activity log.
-- **Database:** Postgres through the `pg` driver when `DATABASE_URL` is set, otherwise embedded PGlite (`src/server/db.ts`). Migrations live in `src/server/migrations.ts` and run automatically at startup.
+- **Database:** Postgres through the `pg` driver when `DATABASE_URL` is set, otherwise embedded PGlite. `src/server/db.ts` is runtime-neutral; the Node drivers are in `src/server/db-node.ts`, and the demo's in-browser driver is in `src/demo/runtime.ts`. Migrations live in `src/server/migrations.ts` and run automatically at startup.
 - **Sync:** clients poll `/api/version` every 3 s and reload only when something changed. This works on any host, serverless included.
-- **Auth:** username + password (scrypt), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
+- **Auth:** username + password (PBKDF2-SHA256 via Web Crypto, so the same code runs in the browser demo), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
 - **Concurrency:** order codes come from a Postgres sequence. Stage changes lock the order row. Editing an order sends the version you started from, and the server rejects the save (409) if someone changed the order in the meantime.
 
-Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item), `order_events` (activity log), `app_meta` (change counter).
+Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item), `order_events` (activity log), `feedback`, `app_meta` (change counter).
 
 ```
 src/
@@ -149,6 +184,7 @@ src/
   components/     one component per tab + shared UI
   lib/            shared logic (dates, Jalali, production rules, formatting, types)
   server/         API, auth, database, migrations, demo seed
+  demo/           in-browser runtime for the GitHub Pages demo
 scripts/seed.mts  npm run db:seed
 legacy/           original prototype (reference only)
 ```

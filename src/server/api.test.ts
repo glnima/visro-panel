@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Bootstrap, Order } from "@/lib/types";
 import { handle } from "./api";
-import { createPgDb, createPgliteDb, migrate, setDbForTests, type Db } from "./db";
+import { migrate, setDbForTests, type Db } from "./db";
+import { createPgDb, createPgliteDb } from "./db-node";
 import { seedDemo } from "./seed";
 
 let db: Db;
@@ -189,5 +190,34 @@ describe("admin", () => {
   it("refuses to delete a category that has products", async () => {
     const b = await boot("admin");
     expect((await call("admin", "DELETE", `/api/categories/${b.products[0].categoryId}`)).status).toBe(409);
+  });
+});
+
+describe("feedback", () => {
+  it("lets anyone send feedback and only admins read it", async () => {
+    expect((await call("workshop", "POST", "/api/feedback", { kind: "bug", body: "دکمه کار نمی‌کنه", page: "کارگاه" })).status).toBe(200);
+    expect((await call("workshop", "GET", "/api/feedback")).status).toBe(403);
+    const r = await call("admin", "GET", "/api/feedback");
+    expect(r.data.feedback[0]).toMatchObject({ kind: "bug", body: "دکمه کار نمی‌کنه", user: "کارگاه", done: false });
+    expect((await call("admin", "PATCH", `/api/feedback/${r.data.feedback[0].id}`, { done: true })).status).toBe(200);
+  });
+
+  it("rejects empty feedback", async () => {
+    expect((await call("store", "POST", "/api/feedback", { kind: "idea", body: "  " })).status).toBe(400);
+  });
+});
+
+describe("header sessions (browser demo)", () => {
+  it("returns the token in the body and accepts it back in a header", async () => {
+    const login = await handle(
+      new Request("http://demo/api/login", { method: "POST", headers: { "x-mizan": "1" }, body: JSON.stringify({ username: "store", password: "demo1234" }) }),
+      { session: "header" }
+    );
+    const { token } = await login.json();
+    expect(token).toBeTruthy();
+    const boot = await handle(new Request("http://demo/api/bootstrap", { headers: { "x-mizan-session": token } }), { session: "header" });
+    expect(boot.status).toBe(200);
+    // the normal server ignores the header
+    expect((await handle(new Request("http://demo/api/bootstrap", { headers: { "x-mizan-session": token } }))).status).toBe(401);
   });
 });

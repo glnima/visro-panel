@@ -38,6 +38,11 @@ import {
   logEvent,
 } from "./repo";
 
+// "cookie": normal server (httpOnly cookie). "header": the in-browser demo, where
+// scripts can't set cookies on a Request, so the token travels in x-mizan-session
+// and is returned in the login response body.
+export type HandleOptions = { session?: "cookie" | "header" };
+
 type Ctx = {
   req: Request;
   url: URL;
@@ -45,6 +50,8 @@ type Ctx = {
   me: User;
   body: Body;
   params: string[];
+  token: string | undefined;
+  opts: HandleOptions;
 };
 
 type Access = "public" | "auth" | Role[];
@@ -73,7 +80,9 @@ route("GET", "/api/session", "public", async (ctx) => {
   return { me: ctx.me ?? null, needsSetup: users[0].n === 0 };
 });
 
-function withSession(req: Request, token: string, payload: unknown): Response {
+function withSession(ctx: Ctx, token: string, payload: Record<string, unknown>): Response {
+  if (ctx.opts.session === "header") return Response.json({ ...payload, token });
+  const req = ctx.req;
   const secure = new URL(req.url).protocol === "https:" || req.headers.get("x-forwarded-proto") === "https";
   return Response.json(payload, { headers: { "set-cookie": sessionCookie(token, secure) } });
 }
@@ -83,7 +92,7 @@ route("POST", "/api/setup", "public", async (ctx) => {
   if (users[0].n > 0) throw conflict("حساب مدیر قبلاً ساخته شده");
   const user = await insertUser(ctx.q, { ...ctx.body, role: "admin" });
   const token = await createSession(ctx.q, user.id);
-  return withSession(ctx.req, token, { me: user });
+  return withSession(ctx, token, { me: user });
 });
 
 route("POST", "/api/login", "public", async (ctx) => {
@@ -99,11 +108,11 @@ route("POST", "/api/login", "public", async (ctx) => {
     throw new HttpError(401, "نام کاربری یا رمز عبور اشتباهه");
   }
   const token = await createSession(ctx.q, row.id);
-  return withSession(ctx.req, token, { me: toUser(row) });
+  return withSession(ctx, token, { me: toUser(row) });
 });
 
 route("POST", "/api/logout", "public", async (ctx) => {
-  await deleteSession(ctx.q, readCookie(ctx.req.headers.get("cookie"), SESSION_COOKIE));
+  await deleteSession(ctx.q, ctx.token);
   return Response.json({ ok: true }, { headers: { "set-cookie": clearSessionCookie() } });
 });
 
@@ -529,13 +538,47 @@ route("GET", "/api/reports/throughput", SALES, async (ctx) => {
   return { byStage };
 });
 
+// ---------------------------------------------------------------- feedback
+
+const FEEDBACK_KINDS = ["bug", "idea", "other"];
+
+route("POST", "/api/feedback", "auth", async (ctx) => {
+  const kind = String(ctx.body.kind);
+  if (!FEEDBACK_KINDS.includes(kind)) throw bad("نوع بازخورد نامعتبره");
+  const body = text(ctx.body.body, "متن بازخورد", { required: true, max: 4000 });
+  const page = text(ctx.body.page, "صفحه", { max: 40 });
+  await ctx.q.query("insert into feedback (user_id, kind, body, page) values ($1, $2, $3, $4)", [ctx.me.id, kind, body, page]);
+  return { ok: true };
+});
+
+route("GET", "/api/feedback", ADMIN, async (ctx) => {
+  const rows = await ctx.q.query<{
+    id: number; kind: string; body: string; page: string; done: boolean; created_at: string; user_name: string | null; role: Role | null;
+  }>(
+    `select f.id, f.kind, f.body, f.page, f.done, f.created_at, u.display_name as user_name, u.role
+       from feedback f left join users u on u.id = f.user_id
+      order by f.done, f.id desc limit 500`
+  );
+  return {
+    feedback: rows.map((r) => ({
+      id: r.id, kind: r.kind, body: r.body, page: r.page, done: r.done, at: r.created_at, user: r.user_name, role: r.role,
+    })),
+  };
+});
+
+route("PATCH", "/api/feedback/:id", ADMIN, async (ctx) => {
+  const rows = await ctx.q.query("update feedback set done = $2 where id = $1 returning id", [idParam(ctx), bool(ctx.body.done, "وضعیت")]);
+  if (!rows[0]) throw notFound("بازخورد پیدا نشد");
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------- dispatch
 
 function errorResponse(status: number, message: string) {
   return Response.json({ error: message }, { status });
 }
 
-export async function handle(req: Request): Promise<Response> {
+export async function handle(req: Request, opts: HandleOptions = {}): Promise<Response> {
   const url = new URL(req.url);
   const matches = routes.filter((r) => r.pattern.test(url.pathname));
   const r = matches.find((m) => m.method === req.method);
@@ -546,7 +589,10 @@ export async function handle(req: Request): Promise<Response> {
 
   try {
     const db = await getDb();
-    const token = readCookie(req.headers.get("cookie"), SESSION_COOKIE);
+    const token =
+      opts.session === "header"
+        ? req.headers.get("x-mizan-session") ?? undefined
+        : readCookie(req.headers.get("cookie"), SESSION_COOKIE);
     const me = await userForSession(db, token);
     if (r.access !== "public") {
       if (!me) return errorResponse(401, "اول وارد شو");
@@ -558,7 +604,7 @@ export async function handle(req: Request): Promise<Response> {
       body = raw ? asBody(JSON.parse(raw)) : {};
     }
     const params = url.pathname.match(r.pattern)!.slice(1);
-    const run = (q: Queryable) => r.handler({ req, url, q, me: me as User, body, params });
+    const run = (q: Queryable) => r.handler({ req, url, q, me: me as User, body, params, token, opts });
     const result =
       req.method === "GET"
         ? await run(db)

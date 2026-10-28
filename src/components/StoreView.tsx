@@ -5,7 +5,7 @@ import { ArrowUpLeft, Pencil, Printer, Search, Trash2 } from "lucide-react";
 import OrderForm, { type OrderPayload } from "./OrderForm";
 import { useToast } from "./Toast";
 import { Empty, Modal, PageTitle, cardCls, linkBtn } from "./ui";
-import { api, errorMessage } from "@/lib/api";
+import { api, errorMessage, printUrl } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faPrice, faTime } from "@/lib/format";
 import { compareLedger, currentStationText, isDelivered, itemColors, orderTotals, statusOf, toneColor } from "@/lib/production";
@@ -161,7 +161,7 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
                       <Pencil size={13} />
                       ویرایش
                     </button>
-                    <a href={`/print/${o.code}`} target="_blank" rel="noreferrer" className={linkBtn}>
+                    <a href={printUrl(o.code)} target="_blank" rel="noreferrer" className={linkBtn}>
                       <Printer size={13} />
                       چاپ
                     </a>
