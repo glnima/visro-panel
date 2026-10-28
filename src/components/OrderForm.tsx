@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { CheckCircle2, Plus, Save, Trash2 } from "lucide-react";
+import CustomerInput from "./CustomerInput";
 import JalaliDateInput from "./JalaliDateInput";
 import { inputCls, labelCls, primaryBtn } from "./ui";
 import { addDays, todayISO } from "@/lib/dates";
@@ -32,6 +33,7 @@ type Props = {
   products: Product[];
   categories: Category[];
   customers: Customer[];
+  orders: Order[]; // for "N previous orders" in customer suggestions
   initial?: Order;
   onSubmit: (payload: OrderPayload, ready: boolean) => Promise<boolean>;
   onError: (msg: string) => void;
@@ -53,7 +55,7 @@ function linesFrom(order?: Order): Line[] {
   }));
 }
 
-export default function OrderForm({ products, categories, customers, initial, onSubmit, onError }: Props) {
+export default function OrderForm({ products, categories, customers, orders, initial, onSubmit, onError }: Props) {
   const today = todayISO();
   const [customer, setCustomer] = useState(initial?.customer ?? "");
   const [orderDate, setOrderDate] = useState(initial?.orderDate ?? today);
@@ -135,18 +137,7 @@ export default function OrderForm({ products, categories, customers, initial, on
     <form onSubmit={submit} className="flex flex-col gap-4">
       <label className={labelCls}>
         نام مشتری
-        <input
-          value={customer}
-          onChange={(e) => setCustomer(e.target.value)}
-          list="mizan-customers"
-          placeholder="مثلاً بوتیک مبلمان الوند"
-          className={inputCls}
-        />
-        <datalist id="mizan-customers">
-          {customers.map((c) => (
-            <option key={c.id} value={c.name} />
-          ))}
-        </datalist>
+        <CustomerInput value={customer} onChange={setCustomer} customers={customers} orders={orders} />
       </label>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label className={labelCls}>

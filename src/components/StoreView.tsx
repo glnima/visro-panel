@@ -153,6 +153,7 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
           products={data.products}
           categories={data.categories}
           customers={data.customers}
+          orders={data.orders}
           onSubmit={create}
           onError={toast.error}
         />
@@ -315,6 +316,7 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
             products={data.products}
             categories={data.categories}
             customers={data.customers}
+          orders={data.orders}
             initial={editing}
             onSubmit={save}
             onError={toast.error}
