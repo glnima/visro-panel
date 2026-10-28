@@ -1,0 +1,35 @@
+name: بازخورد / Feedback
+description: مشکل، پیشنهاد یا سؤال درباره‌ی میزان
+labels: ["feedback"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: نوع
+      options:
+        - یه چیزی درست کار نمی‌کنه (مشکل)
+        - پیشنهاد / ایده
+        - سؤال یا موارد دیگه
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: با چه نقشی کار می‌کردی؟
+      options:
+        - فروشگاه
+        - کارگاه
+        - مدیر
+        - فقط نسخه‌ی نمایشی رو امتحان کردم
+  - type: textarea
+    id: details
+    attributes:
+      label: توضیح
+      description: اگه مشکله — چی کار کردی، چی انتظار داشتی، چی شد؟ عکس صفحه هم خیلی کمک می‌کنه.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: دستگاه (اختیاری)
+      placeholder: مثلاً گوشی اندروید / کامپیوتر ویندوز، کروم
