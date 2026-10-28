@@ -95,7 +95,7 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
                     return (
                       <div key={o.id} className="flex items-center justify-between gap-2 flex-wrap rounded-lg bg-[#EDE6D6] px-3 py-2 text-xs">
                         <span>
-                          {o.code} · {faDate(o.orderDate)} — {t.summary}
+                          {o.code}، {faDate(o.orderDate)} — {t.summary}
                         </span>
                         <span className="flex items-center gap-3">
                           <span>{faPrice(t.price)} تومان</span>

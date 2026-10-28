@@ -1,7 +1,22 @@
-import type { Bootstrap, Category, Customer, Order, OrderItem, Product, StageKey, Station, User } from "@/lib/types";
+import {
+  STAGES,
+  canSeePrices as roleSeesPrices,
+  type Bootstrap,
+  type Category,
+  type Customer,
+  type Delay,
+  type DelayReason,
+  type Order,
+  type OrderItem,
+  type Product,
+  type StageDone,
+  type StageKey,
+  type Station,
+  type User,
+} from "@/lib/types";
 import type { Queryable } from "./db";
 
-export const canSeePrices = (me: User) => me.role !== "workshop";
+export const canSeePrices = (me: User) => roleSeesPrices(me.role);
 
 type OrderRow = {
   id: number;
@@ -25,14 +40,33 @@ type ItemRow = {
   qty: number;
   fabric_color: string;
   wood_color: string;
-} & Record<StageKey, boolean>;
+} & Record<StageKey, boolean> &
+  Record<`${StageKey}_at`, string | null> &
+  Record<`${StageKey}_by`, number | null>;
+
+type DelayRow = {
+  id: number;
+  item_id: number;
+  stage: StageKey;
+  reason: DelayReason;
+  note: string;
+  eta: string | null;
+  created_at: string;
+  by_name: string | null;
+};
 
 const ORDER_SELECT = `
   select o.id, o.code, o.customer_id, c.name as customer, o.order_date, o.requested,
          o.registered_at, o.delivered_at, o.notes, o.version
     from orders o join customers c on c.id = o.customer_id`;
 
-function toItem(r: ItemRow, prices: boolean): OrderItem {
+function toItem(r: ItemRow, prices: boolean, names: Map<number, string>, delays: Delay[]): OrderItem {
+  const done: Partial<Record<StageKey, StageDone>> = {};
+  for (const s of STAGES) {
+    const at = r[`${s}_at`];
+    const by = r[`${s}_by`];
+    if (r[s] && at) done[s] = { at, by: by === null ? null : names.get(by) ?? null };
+  }
   return {
     id: r.id,
     productId: r.product_id,
@@ -48,6 +82,8 @@ function toItem(r: ItemRow, prices: boolean): OrderItem {
       tailor: r.tailor,
       ruyekoob: r.ruyekoob,
     },
+    done,
+    delays,
   };
 }
 
@@ -57,10 +93,29 @@ async function attachItems(q: Queryable, rows: OrderRow[], prices: boolean): Pro
     "select * from order_items where order_id = any($1::int[]) order by order_id, position, id",
     [rows.map((r) => r.id)]
   );
+  const [users, delayRows] = await Promise.all([
+    q.query<{ id: number; display_name: string }>("select id, display_name from users"),
+    items.length
+      ? q.query<DelayRow>(
+          `select d.id, d.item_id, d.stage, d.reason, d.note, d.eta, d.created_at, u.display_name as by_name
+             from item_delays d left join users u on u.id = d.created_by
+            where d.resolved_at is null and d.item_id = any($1::int[])
+            order by d.id`,
+          [items.map((i) => i.id)]
+        )
+      : Promise.resolve([] as DelayRow[]),
+  ]);
+  const names = new Map(users.map((u) => [u.id, u.display_name]));
+  const delaysByItem = new Map<number, Delay[]>();
+  for (const d of delayRows) {
+    const list = delaysByItem.get(d.item_id) ?? [];
+    list.push({ id: d.id, stage: d.stage, reason: d.reason, note: d.note, eta: d.eta, at: d.created_at, by: d.by_name });
+    delaysByItem.set(d.item_id, list);
+  }
   const byOrder = new Map<number, OrderItem[]>();
   for (const it of items) {
     const list = byOrder.get(it.order_id) ?? [];
-    list.push(toItem(it, prices));
+    list.push(toItem(it, prices, names, delaysByItem.get(it.id) ?? []));
     byOrder.set(it.order_id, list);
   }
   return rows.map((r) => ({
@@ -138,7 +193,7 @@ export async function loadBootstrap(q: Queryable, me: User): Promise<Bootstrap> 
     loadStations(q),
     loadCategories(q),
     loadProducts(q, prices),
-    me.role === "workshop" ? Promise.resolve([]) : loadCustomers(q),
+    prices ? loadCustomers(q) : Promise.resolve([]),
     loadOrders(q, prices),
   ]);
   return { me, version, stations, categories, products, customers, orders };

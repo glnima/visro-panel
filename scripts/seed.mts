@@ -18,4 +18,4 @@ const target = process.env.DATABASE_URL ? "DATABASE_URL" : "local embedded datab
 const db = await getDb();
 await seedDemo(db, { withDemoUsers });
 await db.close();
-console.log(`Demo data loaded into ${target}.${withDemoUsers ? " Demo users: admin / store / workshop, password demo1234" : ""}`);
+console.log(`Demo data loaded into ${target}.${withDemoUsers ? " Demo users: admin, store, workshop, carpentry, zirkar, rangkar, tailor, ruyekoob — password demo1234" : ""}`);

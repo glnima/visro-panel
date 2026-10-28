@@ -10,6 +10,7 @@ import {
   itemStations,
   nextStepMessage,
   stageChangeError,
+  stageState,
   statusOf,
 } from "./production";
 import type { Order, OrderItem, Production, StationKey } from "./types";
@@ -21,7 +22,7 @@ const P = (on: string): Production => ({
 
 let seq = 0;
 function item(production: Production): OrderItem {
-  return { id: ++seq, productId: 1, productName: "مبل", unitPrice: 10, qty: 1, fabricColor: "", woodColor: "", production };
+  return { id: ++seq, productId: 1, productName: "مبل", unitPrice: 10, qty: 1, fabricColor: "", woodColor: "", production, done: {}, delays: [] };
 }
 
 function order(items: Production[], extra: Partial<Order> = {}): Order {
@@ -139,5 +140,16 @@ describe("compareLedger", () => {
     const a = order([P("")], { registeredAt: "2026-10-01T06:00:00.000Z" });
     const b = order([P("")], { registeredAt: "2026-10-01T09:00:00.000Z" });
     expect([a, b].sort(compareLedger)[0]).toBe(b);
+  });
+});
+
+describe("stageState", () => {
+  it("tells done, active, waiting and delayed apart", () => {
+    const it0 = item(P("carpentry"));
+    expect(stageState(it0, "carpentry")).toBe("done");
+    expect(stageState(it0, "zirkar")).toBe("active");
+    expect(stageState(it0, "ruyekoob")).toBe("waiting");
+    it0.delays = [{ id: 1, stage: "ruyekoob", reason: "fabric", note: "", eta: null, at: "", by: null }];
+    expect(stageState(it0, "ruyekoob")).toBe("delayed");
   });
 });

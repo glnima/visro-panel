@@ -11,16 +11,17 @@ import ReportsView from "./ReportsView";
 import SettingsView from "./SettingsView";
 import StoreView from "./StoreView";
 import { useToast } from "./Toast";
-import WorkshopView from "./WorkshopView";
+import ProductionView from "./production/ProductionView";
 import { DEMO, errorMessage } from "@/lib/api";
-import { ROLE_LABELS, type Role, type User } from "@/lib/types";
+import { ROLES, ROLE_LABELS, type Role, type User } from "@/lib/types";
 import { useMizanData } from "@/lib/useMizanData";
 
 type View = "store" | "workshop" | "customers" | "history" | "reports" | "products" | "settings" | "audit" | "feedback";
 
 const TABS: { key: View; label: string; roles: Role[] }[] = [
   { key: "store", label: "فروشگاه", roles: ["admin", "store"] },
-  { key: "workshop", label: "کارگاه تولید", roles: ["admin", "store", "workshop"] },
+  // everyone sees the production line; station workers see only that
+  { key: "workshop", label: "خط تولید", roles: ROLES },
   { key: "customers", label: "مشتری‌ها", roles: ["admin", "store"] },
   { key: "history", label: "تاریخچه", roles: ["admin", "store", "workshop"] },
   { key: "reports", label: "گزارش‌ها", roles: ["admin", "store"] },
@@ -133,7 +134,7 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
         ) : view === "store" ? (
           <StoreView data={data} refresh={refresh} highlightId={highlightId} onJump={jumpToOrder} onFlash={flash} />
         ) : view === "workshop" ? (
-          <WorkshopView data={data} refresh={refresh} highlightId={highlightId} />
+          <ProductionView data={data} refresh={refresh} highlightId={highlightId} />
         ) : view === "customers" ? (
           <CustomersView data={data} refresh={refresh} />
         ) : view === "history" ? (

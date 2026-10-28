@@ -5,6 +5,7 @@ import { CheckCircle2, Circle, ExternalLink, MessageSquarePlus, MessagesSquare }
 import { useToast } from "./Toast";
 import { Empty, Modal, PageTitle, cardCls, inputCls, labelCls, linkBtn, primaryBtn } from "./ui";
 import { DEMO, api, errorMessage, newIssueUrl } from "@/lib/api";
+import { localDate } from "@/lib/dates";
 import { faDate, faTime } from "@/lib/format";
 import { ROLE_LABELS, type Bootstrap, type Feedback, type FeedbackKind, type User } from "@/lib/types";
 
@@ -146,7 +147,7 @@ export function FeedbackView({ data }: { data: Bootstrap }) {
                   </span>
                 </span>
                 <span className="text-xs text-[#8A7B60]">
-                  {faDate(f.at.slice(0, 10))} — {faTime(f.at)}
+                  {faDate(localDate(f.at))} — {faTime(f.at)}
                 </span>
               </div>
               <div className="text-sm whitespace-pre-wrap">{f.body}</div>

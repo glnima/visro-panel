@@ -1,10 +1,32 @@
-export type Role = "admin" | "store" | "workshop";
+export const STAGES = ["carpentry", "zirkar", "rangkar", "tailor", "ruyekoob"] as const;
+export type StageKey = (typeof STAGES)[number];
+export type StationKey = StageKey | "final";
+
+// A station role (e.g. "carpentry") can only act on its own stage.
+export type Role = "admin" | "store" | "workshop" | StageKey;
+
+export const ROLES: Role[] = ["admin", "store", "workshop", ...STAGES];
 
 export const ROLE_LABELS: Record<Role, string> = {
   admin: "مدیر",
   store: "فروشگاه",
-  workshop: "کارگاه",
+  workshop: "سرپرست کارگاه",
+  carpentry: "نجاری",
+  zirkar: "زیرکار",
+  rangkar: "رنگکار",
+  tailor: "خیاط",
+  ruyekoob: "رویه‌کوب",
 };
+
+export const isStationRole = (role: Role): role is StageKey => (STAGES as readonly string[]).includes(role);
+
+// Who may mark a stage done / undo it / report a delay on it.
+export const canWorkStage = (role: Role, stage: StageKey) => role === "admin" || role === "workshop" || role === stage;
+
+// Only the store, admin and supervisor hand orders over.
+export const canDeliver = (role: Role) => role === "admin" || role === "store" || role === "workshop";
+
+export const canSeePrices = (role: Role) => role === "admin" || role === "store";
 
 export type User = {
   id: number;
@@ -13,10 +35,6 @@ export type User = {
   role: Role;
   active: boolean;
 };
-
-export const STAGES = ["carpentry", "zirkar", "rangkar", "tailor", "ruyekoob"] as const;
-export type StageKey = (typeof STAGES)[number];
-export type StationKey = StageKey | "final";
 
 export type Production = Record<StageKey, boolean>;
 
@@ -48,6 +66,29 @@ export type Customer = {
   notes: string;
 };
 
+export type StageDone = { at: string; by: string | null };
+
+export const DELAY_REASONS = {
+  materials: "کمبود مواد / متریال",
+  fabric: "پارچه نرسیده",
+  machine: "خرابی دستگاه",
+  staff: "کمبود نیرو",
+  rework: "اصلاح / دوباره‌کاری",
+  customer: "منتظر تأیید مشتری",
+  other: "سایر",
+} as const;
+export type DelayReason = keyof typeof DELAY_REASONS;
+
+export type Delay = {
+  id: number;
+  stage: StageKey;
+  reason: DelayReason;
+  note: string;
+  eta: string | null; // new estimated finish date, ISO yyyy-mm-dd
+  at: string;
+  by: string | null;
+};
+
 export type OrderItem = {
   id: number;
   productId: number | null;
@@ -57,6 +98,8 @@ export type OrderItem = {
   fabricColor: string;
   woodColor: string;
   production: Production;
+  done: Partial<Record<StageKey, StageDone>>; // when / by whom each finished stage was marked
+  delays: Delay[]; // open (unresolved) delays
 };
 
 export type Order = {

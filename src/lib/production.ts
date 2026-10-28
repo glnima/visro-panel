@@ -1,4 +1,4 @@
-import type { Order, OrderItem, Production, StageKey, Station, StationKey } from "./types";
+import type { Delay, Order, OrderItem, Production, StageKey, Station, StationKey } from "./types";
 import { daysBetween } from "./dates";
 import { faNum } from "./format";
 
@@ -174,4 +174,28 @@ export function itemColors(it: OrderItem): string {
 export function compareLedger(a: Order, b: Order): number {
   if (isDelivered(a) !== isDelivered(b)) return isDelivered(a) ? 1 : -1;
   return b.orderDate.localeCompare(a.orderDate) || b.registeredAt.localeCompare(a.registeredAt);
+}
+
+// ---- per-stage state, for the tracker table ----
+
+export type StageState = "done" | "active" | "waiting" | "delayed";
+
+export function openDelay(it: OrderItem, stage: StageKey): Delay | undefined {
+  return it.delays.find((d) => d.stage === stage);
+}
+
+// done: finished · active: can be worked on now · waiting: earlier stages first ·
+// delayed: someone reported a delay (whether active or waiting)
+export function stageState(it: OrderItem, stage: StageKey): StageState {
+  if (it.production[stage]) return "done";
+  if (openDelay(it, stage)) return "delayed";
+  return PREREQS[stage].every((s) => it.production[s]) ? "active" : "waiting";
+}
+
+export function itemProgress(it: OrderItem): number {
+  return (["carpentry", "zirkar", "rangkar", "tailor", "ruyekoob"] as StageKey[]).filter((s) => it.production[s]).length;
+}
+
+export function hasOpenDelay(o: Order): boolean {
+  return o.items.some((it) => it.delays.length > 0);
 }

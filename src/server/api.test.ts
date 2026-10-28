@@ -29,7 +29,7 @@ beforeAll(async () => {
   await migrate(db);
   setDbForTests(db);
   await seedDemo(db, { withDemoUsers: true });
-  for (const who of ["admin", "store", "workshop"]) expect((await login(who)).status).toBe(200);
+  for (const who of ["admin", "store", "workshop", "carpentry", "tailor"]) expect((await login(who)).status).toBe(200);
 });
 
 afterAll(async () => {
@@ -198,7 +198,7 @@ describe("feedback", () => {
     expect((await call("workshop", "POST", "/api/feedback", { kind: "bug", body: "دکمه کار نمی‌کنه", page: "کارگاه" })).status).toBe(200);
     expect((await call("workshop", "GET", "/api/feedback")).status).toBe(403);
     const r = await call("admin", "GET", "/api/feedback");
-    expect(r.data.feedback[0]).toMatchObject({ kind: "bug", body: "دکمه کار نمی‌کنه", user: "کارگاه", done: false });
+    expect(r.data.feedback[0]).toMatchObject({ kind: "bug", body: "دکمه کار نمی‌کنه", user: "سرپرست کارگاه", done: false });
     expect((await call("admin", "PATCH", `/api/feedback/${r.data.feedback[0].id}`, { done: true })).status).toBe(200);
   });
 
@@ -219,5 +219,79 @@ describe("header sessions (browser demo)", () => {
     expect(boot.status).toBe(200);
     // the normal server ignores the header
     expect((await handle(new Request("http://demo/api/bootstrap", { headers: { "x-mizan-session": token } }))).status).toBe(401);
+  });
+});
+
+describe("station roles", () => {
+  let order: Order;
+
+  beforeAll(async () => {
+    const b = await boot("store");
+    const r = await call("store", "POST", "/api/orders", {
+      customer: "مشتری ایستگاه",
+      items: [{ productId: b.products[0].id, qty: 1 }],
+    });
+    order = r.data.order;
+  });
+
+  it("hides prices and customers from station workers", async () => {
+    const b = await boot("carpentry");
+    expect(b.me.role).toBe("carpentry");
+    expect(b.products.every((p) => p.price === null)).toBe(true);
+    expect(b.customers).toEqual([]);
+  });
+
+  it("lets a worker finish only their own stage, and records who and when", async () => {
+    const item = order.items[0].id;
+    expect((await call("tailor", "POST", `/api/items/${item}/stage`, { stage: "carpentry", done: true })).status).toBe(403);
+    const r = await call("carpentry", "POST", `/api/items/${item}/stage`, { stage: "carpentry", done: true });
+    expect(r.status).toBe(200);
+    expect(r.data.order.items[0].done.carpentry).toMatchObject({ by: "رضا (نجاری)" });
+    expect(r.data.order.items[0].done.carpentry.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("keeps workers away from orders, delivery and admin", async () => {
+    expect((await call("carpentry", "POST", "/api/orders", {})).status).toBe(403);
+    expect((await call("carpentry", "POST", `/api/orders/${order.id}/deliver`, { delivered: true })).status).toBe(403);
+    expect((await call("carpentry", "GET", "/api/users")).status).toBe(403);
+  });
+
+  it("reports a delay with a reason, and finishing the stage clears it", async () => {
+    const item = order.items[0].id;
+    expect((await call("tailor", "POST", `/api/items/${item}/delays`, { stage: "tailor", reason: "nope" })).status).toBe(400);
+    expect((await call("tailor", "POST", `/api/items/${item}/delays`, { stage: "zirkar", reason: "fabric" })).status).toBe(403);
+    expect((await call("tailor", "POST", `/api/items/${item}/delays`, { stage: "tailor", reason: "other" })).status).toBe(400);
+    const r = await call("tailor", "POST", `/api/items/${item}/delays`, {
+      stage: "tailor", reason: "fabric", note: "پارچه نرسیده", eta: "2026-11-10",
+    });
+    expect(r.status).toBe(200);
+    expect(r.data.order.items[0].delays).toEqual([
+      expect.objectContaining({ stage: "tailor", reason: "fabric", note: "پارچه نرسیده", eta: "2026-11-10", by: "مریم (خیاط)" }),
+    ]);
+    // a second report replaces the first
+    const again = await call("tailor", "POST", `/api/items/${item}/delays`, { stage: "tailor", reason: "staff" });
+    expect(again.data.order.items[0].delays).toHaveLength(1);
+    expect(again.data.order.items[0].delays[0].reason).toBe("staff");
+
+    const done = await call("tailor", "POST", `/api/items/${item}/stage`, { stage: "tailor", done: true });
+    expect(done.data.order.items[0].delays).toEqual([]);
+  });
+
+  it("lets the supervisor resolve a delay on any stage", async () => {
+    const item = order.items[0].id;
+    const r = await call("carpentry", "POST", `/api/items/${item}/delays`, { stage: "carpentry", reason: "machine" });
+    expect(r.status).toBe(409); // carpentry is already done
+    const z = await call("workshop", "POST", `/api/items/${item}/delays`, { stage: "zirkar", reason: "machine" });
+    const delayId = z.data.order.items[0].delays[0].id;
+    expect((await call("tailor", "POST", `/api/delays/${delayId}/resolve`)).status).toBe(403);
+    const resolved = await call("workshop", "POST", `/api/delays/${delayId}/resolve`);
+    expect(resolved.data.order.items[0].delays).toEqual([]);
+  });
+
+  it("builds a timeline of everything that happened to the order", async () => {
+    const r = await call("carpentry", "GET", `/api/orders/${order.id}/timeline`);
+    const kinds = r.data.events.map((e: { kind: string }) => e.kind);
+    expect(kinds[0]).toBe("created");
+    expect(kinds).toEqual(expect.arrayContaining(["stage_done", "delay_reported", "delay_resolved"]));
   });
 });
