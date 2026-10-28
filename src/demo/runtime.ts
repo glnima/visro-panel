@@ -3,7 +3,7 @@
 // gets their own private copy of the demo data.
 import { handle } from "@/server/api";
 import { PGLITE_PARSERS, getDb, setDbFactory, wrapPglite } from "@/server/db";
-import { seedDemo } from "@/server/seed";
+import { ensureDemoUsers, seedDemo } from "@/server/seed";
 
 // Loaded from the CDN at runtime so the bundler never has to package the WASM build.
 const PGLITE_URL = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.5.11/dist/index.js";
@@ -26,6 +26,8 @@ function ensureSeeded(): Promise<void> {
     const db = await getDb();
     const [{ n }] = await db.query<{ n: number }>("select count(*)::int as n from users");
     if (n === 0) await seedDemo(db, { withDemoUsers: true });
+    // a demo saved by an older version may lack accounts for newer roles
+    else if (await ensureDemoUsers(db)) await db.query("update app_meta set version = version + 1");
   })();
   ready.catch(() => {
     ready = null;

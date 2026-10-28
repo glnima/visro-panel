@@ -1,7 +1,7 @@
 import { addDays, todayISO } from "@/lib/dates";
 import { STAGES, type DelayReason, type Production, type Role, type StageKey } from "@/lib/types";
 import { hashPassword } from "./auth";
-import type { Db } from "./db";
+import type { Db, Queryable } from "./db";
 
 const P = (s: string): Production => {
   const on = new Set(s.split(",").filter(Boolean));
@@ -64,10 +64,27 @@ export const DEMO_USERS: [username: string, name: string, role: Role][] = [
   ["ruyekoob", "سعید (رویه‌کوب)", "ruyekoob"],
 ];
 
+// Adds whichever demo accounts are missing (password demo1234), leaving existing
+// users and all data alone. The browser demo runs this on every start, so a
+// visitor whose saved demo predates a new role still gets that role's account.
+export async function ensureDemoUsers(q: Queryable): Promise<number> {
+  const existing = new Set((await q.query<{ username: string }>("select username from users")).map((r) => r.username));
+  const missing = DEMO_USERS.filter(([username]) => !existing.has(username));
+  if (missing.length === 0) return 0;
+  const hash = await hashPassword("demo1234");
+  for (const [username, name, role] of missing) {
+    await q.query(
+      `insert into users (username, display_name, password_hash, role) values ($1, $2, $3, $4)
+         on conflict (username) do nothing`,
+      [username, name, hash, role]
+    );
+  }
+  return missing.length;
+}
+
 // Replaces all orders, products and customers with demo data. Users are kept.
 export async function seedDemo(db: Db, { withDemoUsers = false } = {}): Promise<void> {
   const today = todayISO();
-  const hash = withDemoUsers ? await hashPassword("demo1234") : "";
   await db.tx(async (q) => {
     await q.query("delete from order_events");
     await q.query("delete from order_items");
@@ -75,15 +92,7 @@ export async function seedDemo(db: Db, { withDemoUsers = false } = {}): Promise<
     await q.query("delete from products");
     await q.query("delete from customers");
 
-    if (withDemoUsers) {
-      for (const [username, name, role] of DEMO_USERS) {
-        await q.query(
-          `insert into users (username, display_name, password_hash, role) values ($1, $2, $3, $4)
-             on conflict (username) do nothing`,
-          [username, name, hash, role]
-        );
-      }
-    }
+    if (withDemoUsers) await ensureDemoUsers(q);
     // who "did" each finished stage in the demo: that station's worker, if there is one
     const workers = new Map(
       (await q.query<{ id: number; role: string }>("select id, role from users where active order by id")).map((u) => [u.role, u.id])
