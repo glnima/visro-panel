@@ -3,7 +3,7 @@ import type { Bootstrap, Order } from "@/lib/types";
 import { handle } from "./api";
 import { migrate, setDbForTests, type Db } from "./db";
 import { createPgDb, createPgliteDb } from "./db-node";
-import { seedDemo } from "./seed";
+import { ensureDemoUsers, seedDemo } from "./seed";
 
 let db: Db;
 const cookies: Record<string, string> = {};
@@ -304,5 +304,14 @@ describe("customer names", () => {
     expect(first.data.order.customer).toBe("گالری نیک‌نام");
     expect(second.data.order.customerId).toBe(first.data.order.customerId);
     expect((await call("store", "POST", "/api/customers", { name: "گالري نيك‌نام" })).status).toBe(409);
+  });
+});
+
+describe("ensureDemoUsers", () => {
+  it("adds only the demo accounts that are missing", async () => {
+    await db.query("delete from users where username in ('zirkar', 'rangkar')");
+    expect(await ensureDemoUsers(db)).toBe(2);
+    expect(await ensureDemoUsers(db)).toBe(0);
+    expect((await call("zirkar", "POST", "/api/login", { username: "zirkar", password: "demo1234" })).status).toBe(200);
   });
 });
