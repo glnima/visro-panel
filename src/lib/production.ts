@@ -1,4 +1,4 @@
-import type { Order, OrderItem, Production, StageKey, Station, StationKey } from "./types";
+import type { Delay, Order, OrderItem, Production, StageKey, Station, StationKey } from "./types";
 import { daysBetween } from "./dates";
 import { faNum } from "./format";
 
@@ -174,4 +174,92 @@ export function itemColors(it: OrderItem): string {
 export function compareLedger(a: Order, b: Order): number {
   if (isDelivered(a) !== isDelivered(b)) return isDelivered(a) ? 1 : -1;
   return b.orderDate.localeCompare(a.orderDate) || b.registeredAt.localeCompare(a.registeredAt);
+}
+
+// ---- per-stage state, for the tracker table ----
+
+export type StageState = "done" | "active" | "waiting" | "delayed";
+
+export function openDelay(it: OrderItem, stage: StageKey): Delay | undefined {
+  return it.delays.find((d) => d.stage === stage);
+}
+
+// done: finished · active: can be worked on now · waiting: earlier stages first ·
+// delayed: someone reported a delay (whether active or waiting)
+export function stageState(it: OrderItem, stage: StageKey): StageState {
+  if (it.production[stage]) return "done";
+  if (openDelay(it, stage)) return "delayed";
+  return PREREQS[stage].every((s) => it.production[s]) ? "active" : "waiting";
+}
+
+export function itemProgress(it: OrderItem): number {
+  return (["carpentry", "zirkar", "rangkar", "tailor", "ruyekoob"] as StageKey[]).filter((s) => it.production[s]).length;
+}
+
+export function hasOpenDelay(o: Order): boolean {
+  return o.items.some((it) => it.delays.length > 0);
+}
+
+// ---- sorting and filtering the open-orders list ----
+
+export const LEDGER_SORTS = {
+  remaining: "کمترین روز مانده",
+  orderDate: "تاریخ سفارش",
+  registered: "آخرین ثبت",
+  total: "مبلغ سفارش",
+  progress: "پیشرفت تولید",
+  customer: "نام مشتری",
+} as const;
+export type LedgerSort = keyof typeof LEDGER_SORTS;
+
+// Fraction of all stages finished across the order's items (0..1).
+export function orderProgress(o: Order): number {
+  const total = o.items.length * 5;
+  return total ? o.items.reduce((s, it) => s + itemProgress(it), 0) / total : 0;
+}
+
+// Each key's natural direction (e.g. fewest days left first, newest order first);
+// `reverse` flips it. Ties fall back to the promised date, then the order code.
+export function sortLedger(orders: Order[], key: LedgerSort, reverse = false): Order[] {
+  const natural: Record<LedgerSort, (a: Order, b: Order) => number> = {
+    remaining: (a, b) => a.requested.localeCompare(b.requested),
+    orderDate: (a, b) => b.orderDate.localeCompare(a.orderDate) || b.registeredAt.localeCompare(a.registeredAt),
+    registered: (a, b) => b.registeredAt.localeCompare(a.registeredAt),
+    total: (a, b) => orderTotals(b).price - orderTotals(a).price,
+    progress: (a, b) => orderProgress(a) - orderProgress(b),
+    customer: (a, b) => a.customer.localeCompare(b.customer, "fa"),
+  };
+  const cmp = natural[key];
+  return [...orders].sort((a, b) => {
+    const primary = reverse ? -cmp(a, b) : cmp(a, b);
+    return primary || a.requested.localeCompare(b.requested) || a.code.localeCompare(b.code);
+  });
+}
+
+export const LEDGER_FILTERS = {
+  all: "همه",
+  late: "عقب‌افتاده",
+  today: "امروز",
+  soon: "تا ۳ روز",
+  delayed: "تأخیر تولید",
+  ready: "آماده‌ی تحویل",
+} as const;
+export type LedgerFilter = keyof typeof LEDGER_FILTERS;
+
+export function matchesLedgerFilter(o: Order, f: LedgerFilter, today: string): boolean {
+  const left = daysBetween(today, o.requested);
+  switch (f) {
+    case "all":
+      return true;
+    case "late":
+      return left < 0;
+    case "today":
+      return left === 0;
+    case "soon":
+      return left >= 0 && left <= 3;
+    case "delayed":
+      return hasOpenDelay(o);
+    case "ready":
+      return isOrderReady(o);
+  }
 }

@@ -1,6 +1,18 @@
 import { addDays, todayISO } from "@/lib/dates";
 import { fullProduction, isOrderReady, stageChangeError } from "@/lib/production";
-import { MAX_PRODUCTS, STAGES, type Production, type Role, type StageKey, type User } from "@/lib/types";
+import {
+  DELAY_REASONS,
+  MAX_PRODUCTS,
+  ROLES,
+  STAGES,
+  canDeliver,
+  canWorkStage,
+  type DelayReason,
+  type Production,
+  type Role,
+  type StageKey,
+  type User,
+} from "@/lib/types";
 import {
   SESSION_COOKIE,
   clearSessionCookie,
@@ -64,9 +76,8 @@ const route = (method: string, path: string, access: Access, handler: Handler) =
   routes.push({ method, pattern, access, handler });
 };
 
-const ALL: Role[] = ["admin", "store", "workshop"];
+const DELIVERY: Role[] = ROLES.filter(canDeliver);
 const SALES: Role[] = ["admin", "store"];
-const SHOP_FLOOR: Role[] = ["admin", "workshop"];
 const ADMIN: Role[] = ["admin"];
 
 const idParam = (ctx: Ctx, i = 0) => int(ctx.params[i], "شناسه", { min: 1 });
@@ -281,7 +292,7 @@ route("POST", "/api/orders/:id/restore", SALES, async (ctx) => {
   return respondOrder(ctx, id);
 });
 
-route("POST", "/api/orders/:id/deliver", ALL, async (ctx) => {
+route("POST", "/api/orders/:id/deliver", DELIVERY, async (ctx) => {
   const id = idParam(ctx);
   const delivered = bool(ctx.body.delivered, "وضعیت تحویل");
   const current = await lockOrder(ctx.q, id);
@@ -299,30 +310,113 @@ route("POST", "/api/orders/:id/deliver", ALL, async (ctx) => {
   return respondOrder(ctx, id);
 });
 
-route("POST", "/api/items/:id/stage", SHOP_FLOOR, async (ctx) => {
-  const itemId = idParam(ctx);
-  const stage = ctx.body.stage as StageKey;
+function stageParam(v: unknown, me: User): StageKey {
+  const stage = v as StageKey;
   if (!STAGES.includes(stage)) throw bad("مرحله نامعتبره");
-  const done = bool(ctx.body.done, "وضعیت");
-  const rows = await ctx.q.query<{ order_id: number } & Production>(
-    `select order_id, ${STAGES.join(", ")} from order_items where id = $1`,
-    [itemId]
-  );
+  if (!canWorkStage(me.role, stage)) throw new HttpError(403, "فقط مرحله‌ی خودت رو می‌تونی ثبت کنی");
+  return stage;
+}
+
+// Locks the item's order and checks it's still in production.
+async function lockItemOrder(q: Queryable, itemId: number) {
+  const rows = await q.query<{ order_id: number }>("select order_id from order_items where id = $1", [itemId]);
   if (!rows[0]) throw notFound("قلم پیدا نشد");
-  const order = await lockOrder(ctx.q, rows[0].order_id);
+  const order = await lockOrder(q, rows[0].order_id);
   if (order.deleted_at) throw notFound("سفارش پیدا نشد");
   if (order.delivered_at) throw conflict("این سفارش تحویل شده");
+  return order;
+}
+
+route("POST", "/api/items/:id/stage", "auth", async (ctx) => {
+  const itemId = idParam(ctx);
+  const stage = stageParam(ctx.body.stage, ctx.me);
+  const done = bool(ctx.body.done, "وضعیت");
+  const order = await lockItemOrder(ctx.q, itemId);
   // re-read under the order lock so two people can't race on the same item
   const [p] = await ctx.q.query<Production>(`select ${STAGES.join(", ")} from order_items where id = $1`, [itemId]);
   const err = stageChangeError(p, stage, done);
   if (err) throw conflict(err);
-  await ctx.q.query(`update order_items set ${stage} = $2 where id = $1`, [itemId, done]);
+  await ctx.q.query(
+    `update order_items set ${stage} = $2, ${stage}_at = case when $2 then now() end, ${stage}_by = case when $2 then $3::int end
+      where id = $1`,
+    [itemId, done, ctx.me.id]
+  );
+  if (done) {
+    // finishing the stage settles any delay reported on it
+    await ctx.q.query(
+      "update item_delays set resolved_at = now(), resolved_by = $3 where item_id = $1 and stage = $2 and resolved_at is null",
+      [itemId, stage, ctx.me.id]
+    );
+  }
   await touchOrder(ctx.q, order.id);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: done ? "stage_done" : "stage_undone", orderId: order.id, itemId, stage });
   return respondOrder(ctx, order.id);
 });
 
-route("GET", "/api/print/:code", ALL, async (ctx) => {
+route("POST", "/api/items/:id/delays", "auth", async (ctx) => {
+  const itemId = idParam(ctx);
+  const stage = stageParam(ctx.body.stage, ctx.me);
+  const reason = ctx.body.reason as DelayReason;
+  if (!(reason in DELAY_REASONS)) throw bad("دلیل تأخیر رو انتخاب کن");
+  const note = text(ctx.body.note, "توضیح", { max: 1000 });
+  if (reason === "other" && !note) throw bad("برای «سایر» یه توضیح کوتاه بنویس");
+  const eta = ctx.body.eta ? isoDate(ctx.body.eta, "تاریخ تخمینی") : null;
+  const order = await lockItemOrder(ctx.q, itemId);
+  const [p] = await ctx.q.query<Production>(`select ${STAGES.join(", ")} from order_items where id = $1`, [itemId]);
+  if (p[stage]) throw conflict("این مرحله تمام شده؛ تأخیر معنی نداره");
+  // one open delay per item and stage: a new report replaces the old one
+  await ctx.q.query(
+    "update item_delays set resolved_at = now(), resolved_by = $3 where item_id = $1 and stage = $2 and resolved_at is null",
+    [itemId, stage, ctx.me.id]
+  );
+  await ctx.q.query(
+    "insert into item_delays (item_id, stage, reason, note, eta, created_by) values ($1, $2, $3, $4, $5, $6)",
+    [itemId, stage, reason, note, eta, ctx.me.id]
+  );
+  await touchOrder(ctx.q, order.id);
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "delay_reported", orderId: order.id, itemId, stage, details: { reason, note, eta } });
+  return respondOrder(ctx, order.id);
+});
+
+route("POST", "/api/delays/:id/resolve", "auth", async (ctx) => {
+  const id = idParam(ctx);
+  const rows = await ctx.q.query<{ item_id: number; stage: StageKey; resolved_at: string | null }>(
+    "select item_id, stage, resolved_at from item_delays where id = $1",
+    [id]
+  );
+  if (!rows[0]) throw notFound("تأخیر پیدا نشد");
+  stageParam(rows[0].stage, ctx.me);
+  const order = await lockItemOrder(ctx.q, rows[0].item_id);
+  if (rows[0].resolved_at) throw conflict("این تأخیر قبلاً برطرف شده");
+  await ctx.q.query("update item_delays set resolved_at = now(), resolved_by = $2 where id = $1", [id, ctx.me.id]);
+  await touchOrder(ctx.q, order.id);
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "delay_resolved", orderId: order.id, itemId: rows[0].item_id, stage: rows[0].stage });
+  return respondOrder(ctx, order.id);
+});
+
+// Everything that happened to one order, oldest first.
+route("GET", "/api/orders/:id/timeline", "auth", async (ctx) => {
+  const id = idParam(ctx);
+  const rows = await ctx.q.query<{
+    id: number; at: string; kind: string; stage: StageKey | null; item_name: string | null;
+    user_name: string | null; details: Record<string, unknown>;
+  }>(
+    `select e.id, e.at, e.kind, e.stage, i.product_name as item_name, u.display_name as user_name, e.details
+       from order_events e
+       left join order_items i on i.id = e.item_id
+       left join users u on u.id = e.user_id
+      where e.order_id = $1
+      order by e.at, e.id`,
+    [id]
+  );
+  return {
+    events: rows.map((r) => ({
+      id: r.id, at: r.at, kind: r.kind, stage: r.stage, orderCode: null, itemName: r.item_name, user: r.user_name, details: r.details,
+    })),
+  };
+});
+
+route("GET", "/api/print/:code", "auth", async (ctx) => {
   const order = await loadOrder(ctx.q, { code: decodeURIComponent(ctx.params[0]) }, false);
   if (!order) throw notFound("سفارش پیدا نشد");
   return { order, stations: await loadStations(ctx.q) };
@@ -442,7 +536,6 @@ route("PATCH", "/api/stations/:key", ADMIN, async (ctx) => {
 
 // ---------------------------------------------------------------- users
 
-const ROLES: Role[] = ["admin", "store", "workshop"];
 
 async function insertUser(q: Queryable, b: Body): Promise<User> {
   const username = text(b.username, "نام کاربری", { required: true, max: 50 }).toLowerCase();

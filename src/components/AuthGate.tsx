@@ -6,7 +6,7 @@ import MizanApp from "./MizanApp";
 import { ToastProvider } from "./Toast";
 import { inputCls, labelCls, primaryBtn } from "./ui";
 import { ApiError, DEMO, REPO_URL, UNAUTHORIZED_EVENT, api, errorMessage } from "@/lib/api";
-import { ROLE_LABELS, type Role, type User } from "@/lib/types";
+import { ROLES, ROLE_LABELS, type User } from "@/lib/types";
 
 type Session = { me: User | null; needsSetup: boolean };
 
@@ -122,8 +122,9 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
               کد پروژه
             </a>
           </div>
+          <div className="mb-1.5 font-semibold">ورود به‌عنوان:</div>
           <div className="flex flex-wrap gap-2">
-            {(["admin", "store", "workshop"] as Role[]).map((r) => (
+            {ROLES.map((r) => (
               <button
                 key={r}
                 type="button"
@@ -131,7 +132,7 @@ function AuthForm({ setup, onDone }: { setup: boolean; onDone: (me: User) => voi
                 onClick={() => submit(null, { username: r, password: "demo1234" })}
                 className="rounded-md bg-[#3B241A] text-[#F3EEE1] px-3 py-1.5 font-medium disabled:opacity-60"
               >
-                ورود به‌عنوان {ROLE_LABELS[r]}
+                {ROLE_LABELS[r]}
               </button>
             ))}
           </div>

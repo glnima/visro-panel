@@ -10,6 +10,9 @@ import {
   itemStations,
   nextStepMessage,
   stageChangeError,
+  matchesLedgerFilter,
+  sortLedger,
+  stageState,
   statusOf,
 } from "./production";
 import type { Order, OrderItem, Production, StationKey } from "./types";
@@ -21,7 +24,7 @@ const P = (on: string): Production => ({
 
 let seq = 0;
 function item(production: Production): OrderItem {
-  return { id: ++seq, productId: 1, productName: "مبل", unitPrice: 10, qty: 1, fabricColor: "", woodColor: "", production };
+  return { id: ++seq, productId: 1, productName: "مبل", unitPrice: 10, qty: 1, fabricColor: "", woodColor: "", production, done: {}, delays: [] };
 }
 
 function order(items: Production[], extra: Partial<Order> = {}): Order {
@@ -139,5 +142,45 @@ describe("compareLedger", () => {
     const a = order([P("")], { registeredAt: "2026-10-01T06:00:00.000Z" });
     const b = order([P("")], { registeredAt: "2026-10-01T09:00:00.000Z" });
     expect([a, b].sort(compareLedger)[0]).toBe(b);
+  });
+});
+
+describe("stageState", () => {
+  it("tells done, active, waiting and delayed apart", () => {
+    const it0 = item(P("carpentry"));
+    expect(stageState(it0, "carpentry")).toBe("done");
+    expect(stageState(it0, "zirkar")).toBe("active");
+    expect(stageState(it0, "ruyekoob")).toBe("waiting");
+    it0.delays = [{ id: 1, stage: "ruyekoob", reason: "fabric", note: "", eta: null, at: "", by: null }];
+    expect(stageState(it0, "ruyekoob")).toBe("delayed");
+  });
+});
+
+describe("sortLedger / matchesLedgerFilter", () => {
+  const today = "2026-10-25";
+  const a = order([P("")], { code: "SF-A", customer: "بهار", requested: "2026-10-30", orderDate: "2026-10-01", registeredAt: "2026-10-01T08:00:00Z" });
+  const b = order([fullProduction()], { code: "SF-B", customer: "آرش", requested: "2026-10-20", orderDate: "2026-10-10", registeredAt: "2026-10-10T08:00:00Z" });
+  const c = order([P("carpentry"), P("")], { code: "SF-C", customer: "پویا", requested: "2026-10-25", orderDate: "2026-10-05", registeredAt: "2026-10-05T08:00:00Z" });
+  c.items[0].unitPrice = 500;
+  const codes = (list: Order[]) => list.map((o) => o.code);
+
+  it("sorts by days remaining, overdue first", () => {
+    expect(codes(sortLedger([a, b, c], "remaining"))).toEqual(["SF-B", "SF-C", "SF-A"]);
+    expect(codes(sortLedger([a, b, c], "remaining", true))).toEqual(["SF-A", "SF-C", "SF-B"]);
+  });
+
+  it("sorts by order date (newest first), total, progress and name", () => {
+    expect(codes(sortLedger([a, b, c], "orderDate"))).toEqual(["SF-B", "SF-C", "SF-A"]);
+    expect(codes(sortLedger([a, b, c], "total"))[0]).toBe("SF-C");
+    expect(codes(sortLedger([a, b, c], "progress"))).toEqual(["SF-A", "SF-C", "SF-B"]);
+    expect(codes(sortLedger([a, b, c], "customer"))).toEqual(["SF-B", "SF-A", "SF-C"]);
+  });
+
+  it("filters by urgency and state", () => {
+    expect(matchesLedgerFilter(b, "late", today)).toBe(true);
+    expect(matchesLedgerFilter(c, "today", today)).toBe(true);
+    expect(matchesLedgerFilter(c, "soon", today)).toBe(true);
+    expect(matchesLedgerFilter(a, "soon", today)).toBe(false);
+    expect(matchesLedgerFilter(b, "ready", today)).toBe(true);
   });
 });

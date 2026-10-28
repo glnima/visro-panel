@@ -18,7 +18,8 @@ Requires **Node 22 or newer**. No database to install: locally the app uses an e
 
 ```bash
 npm install
-npm run db:seed -- --with-demo-users   # optional: demo orders + users admin/store/workshop (password demo1234)
+npm run db:seed -- --with-demo-users   # optional: demo orders + users admin, store, workshop, carpentry, zirkar,
+                                       #   rangkar, tailor, ruyekoob (password demo1234)
                                        # (refused when DATABASE_URL is set: that password is public)
 npm run dev                            # http://localhost:3000
 ```
@@ -103,7 +104,8 @@ Employees open `http://<that-computer's-IP>:3000` on their phones or PCs, over t
 | Role | Sees | Can do |
 |---|---|---|
 | **فروشگاه (store)** | Store, Workshop (read-only), Customers, History, Reports — with prices | Create / edit / delete orders, manage customers, mark delivery |
-| **کارگاه (workshop)** | Workshop, History — **no prices, no customer list** (the server never sends them) | Mark stages done / undo, mark delivery, print workshop sheets |
+| **سرپرست کارگاه (workshop)** | Production line, History — **no prices, no customer list** (the server never sends them) | Mark any stage done / undo, report or clear delays on any stage, mark delivery, print workshop sheets |
+| **نجاری / زیرکار / رنگکار / خیاط / رویه‌کوب** (`carpentry`, `zirkar`, `rangkar`, `tailor`, `ruyekoob`) | Production line only — no prices, no customers | **Only their own stage:** mark it done (or undo), or report that it's delayed and why. Everything else is read-only. |
 | **مدیر (admin)** | Everything | All of the above, plus products, stations & capacities, categories, users, activity log |
 
 Every change is recorded in the activity log (رویدادها) with who did it and when.
@@ -122,7 +124,13 @@ Every change is recorded in the activity log (رویدادها) with who did it 
 ## 4. What the app does
 
 - **Store** — new order form: customer (autocompletes from the customer list; new names are added automatically), order date, promised delivery date, items (model, quantity, fabric colour, wood colour), notes. "ثبت سفارش آماده" skips production for showroom stock. The list of open orders supports search, edit, print, "jump to workshop", and delete with undo.
-- **Workshop** — capacity bar per station (green under 60%, amber from 60%, red at 100%+) and a red banner when a station is full. **Each item has its own card** and moves through the stations on its own. The whole order reaches *Final delivery* once every item is finished. Each card has a "done" button, a per-stage editor, and a printable sheet. Every stage change and delivery can be undone from the toast. On phones, one station is shown at a time.
+- **Production line (خط تولید)** — three views of the same data:
+  - **Table** (default): every open order with its items, and the whole pipeline in one row. Each stage cell shows done (date, who), ready, waiting or delayed (reason). Click a cell for details and the actions you're allowed. Click an order for its page: properties, per-item steps and the full timeline (created, each stage done by whom, delays and reasons, delivery).
+  - **Board:** the kanban below.
+  - **My queue:** a station's to-do list with big «تمام شد» / «تأخیر دارد» buttons. It's the default for station workers and built for phones.
+  - Filters for delayed, late, due within 3 days and ready to deliver, plus search and a station filter (tap a station's load card).
+  - **Delays:** a reason (materials, fabric not arrived, machine broken, short-staffed, rework, waiting for the customer, other), an optional note and an estimated finish date. Finishing the stage clears the delay.
+- **Board view** — capacity bar per station (green under 60%, amber from 60%, red at 100%+) and a red banner when a station is full. **Each item has its own card** and moves through the stations on its own. The whole order reaches *Final delivery* once every item is finished. Each card has a "done" button, a per-stage editor, and a printable sheet. Every stage change and delivery can be undone from the toast. On phones, one station is shown at a time.
 - **Customers** — list with phone and notes, order count, total spent, and order history per customer.
 - **History** — delivered orders, with search and a from/to date filter (empty means "any date"). Shows when a delivery was late and can return an order to the workshop.
 - **Reports** — sales, on-time delivery rate, average delay and currently overdue orders for any date range, plus sales by Jalali month and work completed per station.
@@ -176,7 +184,7 @@ All "today" calculations use Tehran time (`NEXT_PUBLIC_APP_TIMEZONE`, default `A
 - **Auth:** username + password (PBKDF2-SHA256 via Web Crypto, so the same code runs in the browser demo), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
 - **Concurrency:** order codes come from a Postgres sequence. Stage changes lock the order row. Editing an order sends the version you started from, and the server rejects the save (409) if someone changed the order in the meantime.
 
-Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item), `order_events` (activity log), `feedback`, `app_meta` (change counter).
+Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item, plus when and by whom each stage was finished), `item_delays`, `order_events` (activity log and order timelines), `feedback`, `app_meta` (change counter).
 
 ```
 src/

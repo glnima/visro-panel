@@ -113,4 +113,38 @@ export const MIGRATIONS: { id: number; sql: string[] }[] = [
       )`,
     ],
   },
+  {
+    id: 3,
+    sql: [
+      // station roles: each can only work on its own stage
+      `alter table users drop constraint users_role_check`,
+      `alter table users add constraint users_role_check
+        check (role in ('admin', 'store', 'workshop', 'carpentry', 'zirkar', 'rangkar', 'tailor', 'ruyekoob'))`,
+      // when and by whom each stage was finished
+      `alter table order_items
+        add column carpentry_at timestamptz,
+        add column carpentry_by int references users(id) on delete set null,
+        add column zirkar_at timestamptz,
+        add column zirkar_by int references users(id) on delete set null,
+        add column rangkar_at timestamptz,
+        add column rangkar_by int references users(id) on delete set null,
+        add column tailor_at timestamptz,
+        add column tailor_by int references users(id) on delete set null,
+        add column ruyekoob_at timestamptz,
+        add column ruyekoob_by int references users(id) on delete set null`,
+      `create table item_delays (
+        id serial primary key,
+        item_id int not null references order_items(id) on delete cascade,
+        stage text not null check (stage in ('carpentry', 'zirkar', 'rangkar', 'tailor', 'ruyekoob')),
+        reason text not null,
+        note text not null default '',
+        eta date,
+        created_by int references users(id) on delete set null,
+        created_at timestamptz not null default now(),
+        resolved_at timestamptz,
+        resolved_by int references users(id) on delete set null
+      )`,
+      `create index item_delays_open_idx on item_delays(item_id) where resolved_at is null`,
+    ],
+  },
 ];
