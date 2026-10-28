@@ -1,4 +1,5 @@
 import { addDays, todayISO } from "@/lib/dates";
+import { normalizeName, searchKey } from "@/lib/text";
 import { fullProduction, isOrderReady, stageChangeError } from "@/lib/production";
 import {
   DELAY_REASONS,
@@ -152,7 +153,12 @@ function parseItems(v: unknown): ItemInput[] {
   });
 }
 
-async function findOrCreateCustomer(q: Queryable, name: string): Promise<number> {
+async function findOrCreateCustomer(q: Queryable, rawName: string): Promise<number> {
+  const name = normalizeName(rawName);
+  // reuse a customer whose name differs only in spacing, half-spaces or ی/ي
+  const key = searchKey(name);
+  const existing = (await q.query<{ id: number; name: string }>("select id, name from customers")).find((c) => searchKey(c.name) === key);
+  if (existing) return existing.id;
   const rows = await q.query<{ id: number }>(
     `insert into customers (name) values ($1)
        on conflict (name) do update set name = excluded.name
@@ -424,8 +430,16 @@ route("GET", "/api/print/:code", "auth", async (ctx) => {
 
 // ---------------------------------------------------------------- customers
 
+async function customerNameClash(q: Queryable, name: string, exceptId: number): Promise<boolean> {
+  const key = searchKey(name);
+  return (await q.query<{ id: number; name: string }>("select id, name from customers")).some(
+    (c) => c.id !== exceptId && searchKey(c.name) === key
+  );
+}
+
 route("POST", "/api/customers", SALES, async (ctx) => {
-  const name = text(ctx.body.name, "نام مشتری", { required: true, max: 120 });
+  const name = normalizeName(text(ctx.body.name, "نام مشتری", { required: true, max: 120 }));
+  if (await customerNameClash(ctx.q, name, 0)) throw conflict("مشتری با این نام وجود داره");
   const rows = await ctx.q.query<{ id: number }>(
     "insert into customers (name, phone, notes) values ($1, $2, $3) on conflict (name) do nothing returning id",
     [name, text(ctx.body.phone, "تلفن", { max: 40 }), text(ctx.body.notes, "توضیحات", { max: 2000 })]
@@ -436,9 +450,8 @@ route("POST", "/api/customers", SALES, async (ctx) => {
 
 route("PATCH", "/api/customers/:id", SALES, async (ctx) => {
   const id = idParam(ctx);
-  const name = text(ctx.body.name, "نام مشتری", { required: true, max: 120 });
-  const clash = await ctx.q.query("select 1 from customers where name = $1 and id <> $2", [name, id]);
-  if (clash.length) throw conflict("مشتری دیگه‌ای با این نام وجود داره");
+  const name = normalizeName(text(ctx.body.name, "نام مشتری", { required: true, max: 120 }));
+  if (await customerNameClash(ctx.q, name, id)) throw conflict("مشتری دیگه‌ای با این نام وجود داره");
   const rows = await ctx.q.query(
     "update customers set name = $2, phone = $3, notes = $4 where id = $1 returning id",
     [id, name, text(ctx.body.phone, "تلفن", { max: 40 }), text(ctx.body.notes, "توضیحات", { max: 2000 })]

@@ -295,3 +295,14 @@ describe("station roles", () => {
     expect(kinds).toEqual(expect.arrayContaining(["stage_done", "delay_reported", "delay_resolved"]));
   });
 });
+
+describe("customer names", () => {
+  it("reuses a customer when the name differs only in ی/ي, spacing or half-spaces", async () => {
+    const b = await boot("store");
+    const first = await call("store", "POST", "/api/orders", { customer: "گالری  نیک‌نام", items: [{ productId: b.products[0].id, qty: 1 }] });
+    const second = await call("store", "POST", "/api/orders", { customer: "گالري نيكنام", items: [{ productId: b.products[0].id, qty: 1 }] });
+    expect(first.data.order.customer).toBe("گالری نیک‌نام");
+    expect(second.data.order.customerId).toBe(first.data.order.customerId);
+    expect((await call("store", "POST", "/api/customers", { name: "گالري نيك‌نام" })).status).toBe(409);
+  });
+});
