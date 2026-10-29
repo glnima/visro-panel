@@ -1,6 +1,6 @@
 import { addDays, todayISO } from "@/lib/dates";
 import { normalizeName, searchKey } from "@/lib/text";
-import { fullProduction, isOrderReady, stageChangeError } from "@/lib/production";
+import { fullProduction, isOrderReady, itemStations, orderTotals, stageChangeError } from "@/lib/production";
 import {
   DELAY_REASONS,
   MAX_PRODUCTS,
@@ -9,6 +9,7 @@ import {
   canDeliver,
   canWorkStage,
   type DelayReason,
+  type Order,
   type Production,
   type Role,
   type StageKey,
@@ -50,6 +51,7 @@ import {
   loadStations,
   logEvent,
 } from "./repo";
+import { getPushService, type Audience, type PushMessage } from "./notify";
 
 // "cookie": normal server (httpOnly cookie). "header": the in-browser demo, where
 // scripts can't set cookies on a Request, so the token travels in x-mizan-session
@@ -65,7 +67,46 @@ type Ctx = {
   params: string[];
   token: string | undefined;
   opts: HandleOptions;
+  after: (() => Promise<void>)[]; // run once the transaction has committed
 };
+
+// Queues a push notification; it's only sent if the change is actually saved.
+function notify(ctx: Ctx, audience: Audience | { userIds: number[] }, message: PushMessage) {
+  const service = getPushService();
+  if (service) ctx.after.push(() => service.send(audience, message));
+}
+
+const stationLabels = async (q: Queryable) => new Map((await loadStations(q)).map((s) => [s.key, s.label]));
+
+function isSecure(req: Request) {
+  return new URL(req.url).protocol === "https:" || req.headers.get("x-forwarded-proto") === "https";
+}
+
+// Tell the workers whose station an order just reached, and the shop when it's ready.
+async function notifyOrderProgress(ctx: Ctx, before: Order | null, after: Order) {
+  const labels = await stationLabels(ctx.q);
+  const url = `./?order=${after.id}`;
+  for (const it of after.items) {
+    const was = new Set(before?.items.find((b) => b.id === it.id) ? itemStations(before.items.find((b) => b.id === it.id)!.production) : []);
+    for (const s of itemStations(it.production)) {
+      if (was.has(s)) continue;
+      notify(ctx, { roles: [s], exceptUserId: ctx.me.id }, {
+        title: `کار جدید برای ${labels.get(s) ?? s}`,
+        body: `${it.productName} × ${it.qty} — ${after.customer} (${after.code})`,
+        url,
+        tag: `stage-${it.id}-${s}`,
+      });
+    }
+  }
+  if (isOrderReady(after) && !(before && isOrderReady(before))) {
+    notify(ctx, { roles: ["store", "workshop", "admin"], exceptUserId: ctx.me.id }, {
+      title: `سفارش ${after.code} آماده‌ی تحویله`,
+      body: `${after.customer} — ${orderTotals(after).summary}`,
+      url,
+      tag: `ready-${after.id}`,
+    });
+  }
+}
 
 type Access = "public" | "auth" | Role[];
 type Handler = (ctx: Ctx) => Promise<unknown>;
@@ -94,9 +135,7 @@ route("GET", "/api/session", "public", async (ctx) => {
 
 function withSession(ctx: Ctx, token: string, payload: Record<string, unknown>): Response {
   if (ctx.opts.session === "header") return Response.json({ ...payload, token });
-  const req = ctx.req;
-  const secure = new URL(req.url).protocol === "https:" || req.headers.get("x-forwarded-proto") === "https";
-  return Response.json(payload, { headers: { "set-cookie": sessionCookie(token, secure) } });
+  return Response.json(payload, { headers: { "set-cookie": sessionCookie(token, isSecure(ctx.req)) } });
 }
 
 route("POST", "/api/setup", "public", async (ctx) => {
@@ -218,6 +257,8 @@ route("POST", "/api/orders", SALES, async (ctx) => {
   const production = ready ? fullProduction() : { carpentry: false, zirkar: false, rangkar: false, tailor: false, ruyekoob: false };
   for (const [i, it] of f.items.entries()) await insertItem(ctx.q, row.id, i, it, production);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "created", orderId: row.id, details: { ready } });
+  const created = await loadOrder(ctx.q, { id: row.id }, false);
+  if (created) await notifyOrderProgress(ctx, null, created);
   return respondOrder(ctx, row.id);
 });
 
@@ -342,6 +383,7 @@ route("POST", "/api/items/:id/stage", "auth", async (ctx) => {
   const [p] = await ctx.q.query<Production>(`select ${STAGES.join(", ")} from order_items where id = $1`, [itemId]);
   const err = stageChangeError(p, stage, done);
   if (err) throw conflict(err);
+  const before = await loadOrder(ctx.q, { id: order.id }, false);
   await ctx.q.query(
     `update order_items set ${stage} = $2, ${stage}_at = case when $2 then now() end, ${stage}_by = case when $2 then $3::int end
       where id = $1`,
@@ -356,6 +398,10 @@ route("POST", "/api/items/:id/stage", "auth", async (ctx) => {
   }
   await touchOrder(ctx.q, order.id);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: done ? "stage_done" : "stage_undone", orderId: order.id, itemId, stage });
+  if (done) {
+    const after = await loadOrder(ctx.q, { id: order.id }, false);
+    if (after) await notifyOrderProgress(ctx, before, after);
+  }
   return respondOrder(ctx, order.id);
 });
 
@@ -381,6 +427,17 @@ route("POST", "/api/items/:id/delays", "auth", async (ctx) => {
   );
   await touchOrder(ctx.q, order.id);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "delay_reported", orderId: order.id, itemId, stage, details: { reason, note, eta } });
+  const delayed = await loadOrder(ctx.q, { id: order.id }, false);
+  const item = delayed?.items.find((i) => i.id === itemId);
+  if (delayed && item) {
+    const label = (await stationLabels(ctx.q)).get(stage) ?? stage;
+    notify(ctx, { roles: ["workshop", "admin", "store"], exceptUserId: ctx.me.id }, {
+      title: `تأخیر در ${label}: ${DELAY_REASONS[reason]}`,
+      body: `${item.productName} — ${delayed.customer} (${delayed.code})${note ? ` — ${note}` : ""}`,
+      url: `./?order=${delayed.id}`,
+      tag: `delay-${itemId}-${stage}`,
+    });
+  }
   return respondOrder(ctx, order.id);
 });
 
@@ -678,6 +735,46 @@ route("PATCH", "/api/feedback/:id", ADMIN, async (ctx) => {
   return { ok: true };
 });
 
+// ---------------------------------------------------------------- push notifications
+
+function pushService() {
+  const service = getPushService();
+  if (!service) throw new HttpError(501, "اعلان‌ها توی این نسخه فعال نیست");
+  return service;
+}
+
+route("GET", "/api/push/key", "auth", async (ctx) => ({ publicKey: await pushService().publicKey(ctx.q) }));
+
+route("POST", "/api/push/subscribe", "auth", async (ctx) => {
+  pushService();
+  const endpoint = text(ctx.body.endpoint, "endpoint", { required: true, max: 2000 });
+  if (!/^https:\/\//.test(endpoint)) throw bad("endpoint نامعتبره");
+  const keys = asBody(ctx.body.keys);
+  const p256dh = text(keys.p256dh, "p256dh", { required: true, max: 200 });
+  const auth = text(keys.auth, "auth", { required: true, max: 100 });
+  // an endpoint belongs to one device; if someone else logs in there, it moves to them
+  await ctx.q.query(
+    `insert into push_subscriptions (user_id, endpoint, p256dh, auth, user_agent) values ($1, $2, $3, $4, $5)
+       on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    [ctx.me.id, endpoint, p256dh, auth, (ctx.req.headers.get("user-agent") ?? "").slice(0, 300)]
+  );
+  return { ok: true };
+});
+
+route("POST", "/api/push/unsubscribe", "auth", async (ctx) => {
+  const endpoint = text(ctx.body.endpoint, "endpoint", { required: true, max: 2000 });
+  await ctx.q.query("delete from push_subscriptions where endpoint = $1 and user_id = $2", [endpoint, ctx.me.id]);
+  return { ok: true };
+});
+
+route("POST", "/api/push/test", "auth", async (ctx) => {
+  pushService();
+  const [{ n }] = await ctx.q.query<{ n: number }>("select count(*)::int as n from push_subscriptions where user_id = $1", [ctx.me.id]);
+  if (n === 0) throw conflict("اول اعلان‌ها رو روی این دستگاه روشن کن");
+  notify(ctx, { userIds: [ctx.me.id] }, { title: "اعلان‌های میزان روشنه ✓", body: "از این به بعد کارهای مربوط به تو همین‌جا خبر داده می‌شه.", tag: "test" });
+  return { ok: true, devices: n };
+});
+
 // ---------------------------------------------------------------- dispatch
 
 function errorResponse(status: number, message: string) {
@@ -699,7 +796,8 @@ export async function handle(req: Request, opts: HandleOptions = {}): Promise<Re
       opts.session === "header"
         ? req.headers.get("x-mizan-session") ?? undefined
         : readCookie(req.headers.get("cookie"), SESSION_COOKIE);
-    const me = await userForSession(db, token);
+    const session = await userForSession(db, token);
+    const me = session?.user ?? null;
     if (r.access !== "public") {
       if (!me) return errorResponse(401, "اول وارد شو");
       if (r.access !== "auth" && !r.access.includes(me.role)) return errorResponse(403, "به این بخش دسترسی نداری");
@@ -710,7 +808,8 @@ export async function handle(req: Request, opts: HandleOptions = {}): Promise<Re
       body = raw ? asBody(JSON.parse(raw)) : {};
     }
     const params = url.pathname.match(r.pattern)!.slice(1);
-    const run = (q: Queryable) => r.handler({ req, url, q, me: me as User, body, params, token, opts });
+    const after: (() => Promise<void>)[] = [];
+    const run = (q: Queryable) => r.handler({ req, url, q, me: me as User, body, params, token, opts, after });
     const result =
       req.method === "GET"
         ? await run(db)
@@ -719,7 +818,16 @@ export async function handle(req: Request, opts: HandleOptions = {}): Promise<Re
             await bumpVersion(q);
             return out;
           });
-    return result instanceof Response ? result : Response.json(result);
+    const response = result instanceof Response ? result : Response.json(result);
+    if (after.length) {
+      // sent before responding (serverless hosts may stop work after the response), capped so a slow push service can't stall the app
+      const work = Promise.allSettled(after.map((fn) => fn()));
+      await Promise.race([work, new Promise((r) => setTimeout(r, 6000))]);
+    }
+    if (session?.renewed && opts.session !== "header" && token && !response.headers.has("set-cookie")) {
+      response.headers.append("set-cookie", sessionCookie(token, isSecure(req)));
+    }
+    return response;
   } catch (e) {
     if (e instanceof HttpError) return errorResponse(e.status, e.message);
     if (e instanceof SyntaxError) return errorResponse(400, "درخواست نامعتبره");

@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { FlaskConical, LogOut, RotateCcw, WifiOff } from "lucide-react";
 import AuditView from "./AuditView";
 import CustomersView from "./CustomersView";
+import { InstallButton, NotificationsButton } from "./AppInstall";
 import { FeedbackButton, FeedbackView } from "./Feedback";
 import HistoryView from "./HistoryView";
 import ProductsView from "./ProductsView";
@@ -34,7 +35,14 @@ const TABS: { key: View; label: string; roles: Role[] }[] = [
 
 export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => void }) {
   const tabs = TABS.filter((t) => t.roles.includes(me.role));
-  const [view, setView] = useState<View>(tabs[0].key);
+  // a tapped notification opens ?order=<id>: show it on the production line
+  const [openOrderId] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get("order"));
+    if (!id) return null;
+    window.history.replaceState(null, "", window.location.pathname);
+    return id;
+  });
+  const [view, setView] = useState<View>(openOrderId ? "workshop" : tabs[0].key);
   const { data, offline, refresh } = useMizanData();
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
@@ -65,7 +73,7 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
 
   return (
     <div className="min-h-screen w-full bg-[#EDE6D6] text-[#2B2420] pb-20">
-      <header className="bg-[#3B241A] text-[#F3EEE1]">
+      <header className="bg-[#3B241A] text-[#F3EEE1] pt-[env(safe-area-inset-top)]">
         <div className="mx-auto max-w-6xl px-4 sm:px-5 py-3 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-4">
             <div>
@@ -77,6 +85,8 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
             <span>
               {me.displayName} · {ROLE_LABELS[me.role]}
             </span>
+            <InstallButton />
+            <NotificationsButton />
             <FeedbackButton me={me} page={tabs.find((t) => t.key === view)?.label ?? ""} />
             <button onClick={onLogout} className="flex items-center gap-1 rounded-md border border-[#5C4033] px-2 py-1 hover:bg-[#4A2E22]">
               <LogOut size={13} />
@@ -134,7 +144,7 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
         ) : view === "store" ? (
           <StoreView data={data} refresh={refresh} highlightId={highlightId} onJump={jumpToOrder} onFlash={flash} />
         ) : view === "workshop" ? (
-          <ProductionView data={data} refresh={refresh} highlightId={highlightId} />
+          <ProductionView data={data} refresh={refresh} highlightId={highlightId} openOrderId={openOrderId} />
         ) : view === "customers" ? (
           <CustomersView data={data} refresh={refresh} />
         ) : view === "history" ? (

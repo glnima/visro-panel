@@ -17,6 +17,18 @@ const nextConfig: NextConfig = {
     : {
         cacheComponents: true,
         partialPrefetching: true,
+        // the service worker must never be served stale, or updates stop reaching installed apps
+        async headers() {
+          return [
+            {
+              source: "/sw.js",
+              headers: [
+                { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+                { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+              ],
+            },
+          ];
+        },
       }),
   turbopack: {
     rules: {

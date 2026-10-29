@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Bootstrap, Order } from "@/lib/types";
 import { handle } from "./api";
 import { migrate, setDbForTests, type Db } from "./db";
+import { setPushService } from "./notify";
 import { createPgDb, createPgliteDb } from "./db-node";
 import { ensureDemoUsers, seedDemo } from "./seed";
 
@@ -313,5 +314,82 @@ describe("ensureDemoUsers", () => {
     expect(await ensureDemoUsers(db)).toBe(2);
     expect(await ensureDemoUsers(db)).toBe(0);
     expect((await call("zirkar", "POST", "/api/login", { username: "zirkar", password: "demo1234" })).status).toBe(200);
+  });
+});
+
+describe("push notifications", () => {
+  type Sent = { audience: unknown; message: { title: string; body: string } };
+  const sent: Sent[] = [];
+
+  beforeAll(() => {
+    setPushService({
+      publicKey: async () => "test-public-key",
+      send: async (audience, message) => {
+        sent.push({ audience, message });
+      },
+    });
+  });
+  afterAll(() => setPushService(undefined));
+
+  it("serves the public key and stores a subscription", async () => {
+    expect((await call("carpentry", "GET", "/api/push/key")).data.publicKey).toBe("test-public-key");
+    const r = await call("carpentry", "POST", "/api/push/subscribe", {
+      endpoint: "https://push.example/abc", keys: { p256dh: "k", auth: "a" },
+    });
+    expect(r.status).toBe(200);
+    expect((await call("carpentry", "POST", "/api/push/subscribe", { endpoint: "http://insecure", keys: { p256dh: "k", auth: "a" } })).status).toBe(400);
+  });
+
+  it("tells carpentry and tailoring about a new order, not the person who made it", async () => {
+    sent.length = 0;
+    const b = await boot("store");
+    const r = await call("store", "POST", "/api/orders", { customer: "مشتری اعلان", items: [{ productId: b.products[0].id, qty: 1 }] });
+    const roles = sent.map((s) => (s.audience as { roles: string[] }).roles[0]).sort();
+    expect(roles).toEqual(["carpentry", "tailor"]);
+    expect(sent.every((s) => (s.audience as { exceptUserId: number }).exceptUserId === b.me.id)).toBe(true);
+    expect(sent[0].message.body).toContain(r.data.order.code);
+  });
+
+  it("tells the next stations when a stage is finished", async () => {
+    const order = (await boot("store")).orders.find((o) => o.customer === "مشتری اعلان")!;
+    sent.length = 0;
+    await call("carpentry", "POST", `/api/items/${order.items[0].id}/stage`, { stage: "carpentry", done: true });
+    const roles = sent.map((s) => (s.audience as { roles: string[] }).roles[0]).sort();
+    expect(roles).toEqual(["rangkar", "zirkar"]);
+  });
+
+  it("tells the supervisor, admin and store about a delay", async () => {
+    const order = (await boot("store")).orders.find((o) => o.customer === "مشتری اعلان")!;
+    sent.length = 0;
+    await call("tailor", "POST", `/api/items/${order.items[0].id}/delays`, { stage: "tailor", reason: "fabric" });
+    expect(sent).toHaveLength(1);
+    expect((sent[0].audience as { roles: string[] }).roles).toEqual(["workshop", "admin", "store"]);
+    expect(sent[0].message.title).toContain("پارچه نرسیده");
+  });
+
+  it("sends nothing when the change fails", async () => {
+    sent.length = 0;
+    await call("tailor", "POST", `/api/items/999999/stage`, { stage: "tailor", done: true });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("refuses a test notification until this user has a device", async () => {
+    expect((await call("store", "POST", "/api/push/test")).status).toBe(409);
+    expect((await call("carpentry", "POST", "/api/push/test")).status).toBe(200);
+  });
+});
+
+describe("sliding sessions", () => {
+  it("renews an old session and refreshes the cookie", async () => {
+    await db.query("update sessions set renewed_at = now() - interval '2 days', expires_at = now() + interval '3 days'");
+    const res = await handle(new Request("http://test/api/version", { headers: { cookie: cookies.admin } }));
+    expect(res.headers.get("set-cookie")).toMatch(/Max-Age=15552000/);
+    const [row] = await db.query<{ days: number }>(
+      "select extract(day from expires_at - now())::int as days from sessions order by renewed_at desc limit 1"
+    );
+    expect(row.days).toBeGreaterThan(170);
+    // a fresh session is left alone
+    const again = await handle(new Request("http://test/api/version", { headers: { cookie: cookies.admin } }));
+    expect(again.headers.get("set-cookie")).toBeNull();
   });
 });

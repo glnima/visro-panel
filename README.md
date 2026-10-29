@@ -99,6 +99,30 @@ Employees open `http://<that-computer's-IP>:3000` on their phones or PCs, over t
 
 ---
 
+## 2b. Install as an app, logins and notifications
+
+Mizan is a PWA (installable web app): it installs from the browser and opens like a native app, with no app store.
+
+| Device | How to install |
+|---|---|
+| Android (Chrome, Edge, Samsung Internet) | «نصب برنامه» button in the header, or the browser menu → *Install app* |
+| Windows / macOS / ChromeOS (Chrome, Edge) | «نصب برنامه» button, or the install icon in the address bar |
+| iPhone / iPad | Safari (or Chrome) → Share → *Add to Home Screen*. The button shows these steps |
+| Mac Safari 17+ | *File → Add to Dock*. The button shows these steps |
+
+- **Log in once.** Sessions last 180 days and renew themselves each day the app is used, so regular users stay logged in. The login form also works with the browser's and phone's password saving.
+- **Offline.** The installed app still opens without a connection and says it's offline. Data needs the server, so nothing is stored for offline use.
+- **Notifications (Web Push).** Turn them on with the bell in the header, separately on each device. They arrive even when the app is closed:
+  - station workers: when an item reaches their station
+  - supervisor, admin and store: when a delay is reported
+  - supervisor, admin and store: when an order is ready to hand over
+
+  Nobody is notified about their own action.
+- **Where notifications work:** Android, Windows, macOS, Linux, and iPhone/iPad on iOS 16.4+ once the app is installed. The GitHub Pages demo has no server, so it has no notifications.
+- **No setup needed.** The signing keys (VAPID) are generated on first use and stored in the database. To manage them yourself, set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and optionally `VAPID_SUBJECT` (a `mailto:` or `https:` contact).
+- **Shared devices.** Logging out turns notifications off on that device, so a shared shop tablet doesn't keep getting the previous person's alerts. The next person to log in, on a device that already allowed notifications, is subscribed automatically.
+- **App icon.** It's drawn in `scripts/icon.svg`. Re-render the PNG sizes with `node scripts/render-icons.mjs`.
+
 ## 3. Roles
 
 | Role | Sees | Can do |
@@ -184,7 +208,7 @@ All "today" calculations use Tehran time (`NEXT_PUBLIC_APP_TIMEZONE`, default `A
 - **Auth:** username + password (PBKDF2-SHA256 via Web Crypto, so the same code runs in the browser demo), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
 - **Concurrency:** order codes come from a Postgres sequence. Stage changes lock the order row. Editing an order sends the version you started from, and the server rejects the save (409) if someone changed the order in the meantime.
 
-Tables: `users`, `sessions`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item, plus when and by whom each stage was finished), `item_delays`, `order_events` (activity log and order timelines), `feedback`, `app_meta` (change counter).
+Tables: `users`, `sessions`, `push_subscriptions`, `app_settings`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item, plus when and by whom each stage was finished), `item_delays`, `order_events` (activity log and order timelines), `feedback`, `app_meta` (change counter).
 
 ```
 src/
