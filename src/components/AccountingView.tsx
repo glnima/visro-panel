@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Calculator, Search, Wallet } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Calculator, Download, Search, Wallet } from "lucide-react";
+import JalaliDateInput from "./JalaliDateInput";
 import PaymentsDialog, { PayBadge } from "./PaymentsDialog";
-import { Empty, PageTitle, cardCls, linkBtn } from "./ui";
-import { orderBalance, orderPaid } from "@/lib/accounting";
+import { useToast } from "./Toast";
+import { Empty, PageTitle, cardCls, linkBtn, secondaryBtn } from "./ui";
+import { ledgerCounts, ledgerCsv, ledgerTotals, orderBalance, orderPaid } from "@/lib/accounting";
+import { api, errorMessage } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faDateFull, faNum, faPrice } from "@/lib/format";
 import { isoToJalali, jalaliToIso } from "@/lib/jalali";
 import { isDelivered, orderTotals } from "@/lib/production";
-import { PAYMENT_METHODS, type Bootstrap, type Order } from "@/lib/types";
+import { PAYMENT_METHODS, canSeeLedger, type Bootstrap, type LedgerEntry, type Order } from "@/lib/types";
 
 type Filter = "due" | "deliveredDue" | "settled" | "all";
 
@@ -178,26 +181,111 @@ export default function AccountingView({ data, refresh }: { data: Bootstrap; ref
           ))}
       </div>
 
-      <section>
-        <h2 className="text-sm font-bold mb-2">آخرین پرداخت‌ها</h2>
-        <div className={cardCls + " overflow-hidden"}>
-          {recent.length === 0 && <Empty>هنوز پرداختی ثبت نشده</Empty>}
-          {recent.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setPayingId(p.order.id)}
-              className="w-full text-right px-4 py-2.5 border-b border-[#E4DCC8] last:border-0 flex items-center justify-between gap-3 flex-wrap text-xs hover:bg-[#F0E4C8]"
-            >
-              <span>
-                <b className="text-sm">{faPrice(p.amount)}</b> — {PAYMENT_METHODS[p.method]}، {p.order.customer} ({p.order.code})
-              </span>
-              <span className="text-[#8A7B60]">{faDateFull(p.paidOn)}</span>
-            </button>
-          ))}
-        </div>
-      </section>
+      {canSeeLedger(data.me.role) ? (
+        <PaymentsLedger version={data.version} monthStart={monthStart} today={today} />
+      ) : (
+        <section>
+          <h2 className="text-sm font-bold mb-2">آخرین پرداخت‌ها</h2>
+          <div className={cardCls + " overflow-hidden"}>
+            {recent.length === 0 && <Empty>هنوز پرداختی ثبت نشده</Empty>}
+            {recent.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setPayingId(p.order.id)}
+                className="w-full text-right px-4 py-2.5 border-b border-[#E4DCC8] last:border-0 flex items-center justify-between gap-3 flex-wrap text-xs hover:bg-[#F0E4C8]"
+              >
+                <span>
+                  <b className="text-sm">{faPrice(p.amount)}</b> — {PAYMENT_METHODS[p.method]}، {p.order.customer} ({p.order.code})
+                </span>
+                <span className="text-[#8A7B60]">{faDateFull(p.paidOn)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {paying && <PaymentsDialog order={paying} refresh={refresh} onClose={() => setPayingId(null)} />}
     </div>
+  );
+}
+
+// Accountant and admin: every payment in a period, voided ones included, with an Excel export.
+function PaymentsLedger({ version, monthStart, today }: { version: number; monthStart: string; today: string }) {
+  const toast = useToast();
+  const [from, setFrom] = useState(monthStart);
+  const [to, setTo] = useState(today);
+  const [entries, setEntries] = useState<LedgerEntry[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ entries: LedgerEntry[] }>("GET", `/api/payments?from=${from}&to=${to}`)
+      .then((r) => !cancelled && setEntries(r.entries))
+      .catch((e) => !cancelled && toast.error(errorMessage(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, [from, to, version, toast]);
+
+  const totals = entries ? ledgerTotals(entries) : null;
+
+  const download = () => {
+    if (!entries) return;
+    const url = URL.createObjectURL(new Blob([ledgerCsv(entries, faDateFull)], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payments-${from}-to-${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <section>
+      <h2 className="text-sm font-bold mb-2">دفتر پرداخت‌ها</h2>
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <label className="flex items-center gap-2 text-xs text-[#6B5E4F]">
+          از
+          <JalaliDateInput value={from} onChange={setFrom} />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-[#6B5E4F]">
+          تا
+          <JalaliDateInput value={to} onChange={setTo} min={from} />
+        </label>
+        <button onClick={download} disabled={!entries?.length} className={secondaryBtn}>
+          <Download size={14} />
+          خروجی اکسل
+        </button>
+      </div>
+      {totals && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#6B5E4F]">
+          <b className="text-sm text-[#2B2420]">جمع معتبر: {faPrice(totals.total)} تومان</b>
+          {totals.byMethod.map((m) => (
+            <span key={m.method}>
+              {PAYMENT_METHODS[m.method]}: {faPrice(m.amount)}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className={cardCls + " overflow-hidden"}>
+        {entries === null && <Empty>در حال بارگذاری…</Empty>}
+        {entries?.length === 0 && <Empty>توی این بازه پرداختی نیست</Empty>}
+        {entries?.map((e) => (
+          <div
+            key={e.id}
+            className={"px-4 py-2.5 border-b border-[#E4DCC8] last:border-0 flex items-center justify-between gap-3 flex-wrap text-xs " + (ledgerCounts(e) ? "" : "opacity-60")}
+          >
+            <span>
+              <b className={"text-sm " + (e.voidedAt ? "line-through" : "")}>{faPrice(e.amount)}</b> — {PAYMENT_METHODS[e.method]}، {e.customer} ({e.orderCode})
+              {e.note && ` — ${e.note}`}
+              <span className="block text-[#8A7B60] mt-0.5">
+                {faDateFull(e.paidOn)}
+                {e.by && `، ثبت: ${e.by}`}
+              </span>
+            </span>
+            {e.voidedAt && <span className="rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[#991B1B]">باطل{e.voidedBy ? ` توسط ${e.voidedBy}` : ""}</span>}
+            {!e.voidedAt && e.orderDeleted && <span className="rounded-full bg-[#F5F1E8] px-2 py-0.5 text-[#8A7B60]">سفارش حذف شده</span>}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

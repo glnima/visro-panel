@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { materialNeeds, orderBalance, payState, readyShortages, stockLevel } from "./accounting";
-import type { Material, Order, Product } from "./types";
+import { ledgerCsv, ledgerTotals, materialNeeds, orderBalance, payState, readyShortages, stockLevel } from "./accounting";
+import type { LedgerEntry, Material, Order, Product } from "./types";
 
 const item = (unitPrice: number, qty: number) => ({
   id: 1, productId: 1, productName: "مبل", unitPrice, qty, fabricColor: "", woodColor: "",
@@ -43,5 +43,34 @@ describe("stock helpers", () => {
   it("finds finished pieces the shop doesn't have, across lines", () => {
     const short = readyShortages([{ productId: 1, qty: 1 }, { productId: 1, qty: 1 }, { productId: 2, qty: 1 }], [product(1, 1), product(2, 1)]);
     expect(short.map((s) => s.product.id)).toEqual([1]);
+  });
+});
+
+describe("payments ledger", () => {
+  const entry = (over: Partial<LedgerEntry>): LedgerEntry => ({
+    id: 1, orderCode: "SF-1", customer: "علی", amount: 100, method: "cash", paidOn: "2026-11-06", note: "", by: "فروشگاه",
+    voidedAt: null, voidedBy: null, orderDeleted: false, ...over,
+  });
+
+  it("counts only valid payments, per method", () => {
+    const t = ledgerTotals([
+      entry({ amount: 100 }),
+      entry({ amount: 50, method: "card" }),
+      entry({ amount: 999, voidedAt: "2026-11-06T00:00:00Z" }),
+      entry({ amount: 999, orderDeleted: true }),
+    ]);
+    expect(t.total).toBe(150);
+    expect(t.byMethod).toEqual([{ method: "cash", amount: 100 }, { method: "card", amount: 50 }]);
+  });
+
+  it("exports CSV Excel can read, with status, quoting and no live formulas", () => {
+    const csv = ledgerCsv([entry({ customer: "=HYPERLINK(1)", note: 'گفت "فردا"، حتماً, لطفاً' }), entry({ voidedAt: "x", voidedBy: "سارا" })], (d) => `j${d}`);
+    const lines = csv.split("\r\n");
+    expect(csv.charCodeAt(0)).toBe(0xfeff);
+    expect(lines[1]).toContain("'=HYPERLINK(1)");
+    expect(lines[1]).toContain('"گفت ""فردا""، حتماً, لطفاً"');
+    expect(lines[1]).toContain("j2026-11-06,2026-11-06");
+    expect(lines[1].endsWith("معتبر")).toBe(true);
+    expect(lines[2].endsWith("باطل (سارا)")).toBe(true);
   });
 });

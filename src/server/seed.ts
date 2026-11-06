@@ -104,6 +104,7 @@ export async function seedWarehouse(q: Queryable): Promise<void> {
 export const DEMO_USERS: [username: string, name: string, role: Role][] = [
   ["admin", "مدیر", "admin"],
   ["store", "فروشگاه", "store"],
+  ["accountant", "سارا (حسابدار)", "accountant"],
   ["workshop", "سرپرست کارگاه", "workshop"],
   ["carpentry", "رضا (نجاری)", "carpentry"],
   ["zirkar", "مهدی (زیرکار)", "zirkar"],

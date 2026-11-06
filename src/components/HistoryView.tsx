@@ -10,7 +10,7 @@ import { api, errorMessage, printUrl } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faNum, faPrice, faTime } from "@/lib/format";
 import { orderTotals, statusOf } from "@/lib/production";
-import type { Bootstrap, Order } from "@/lib/types";
+import { canDeliver, canSeePrices, type Bootstrap, type Order } from "@/lib/types";
 
 export default function HistoryView({ data, refresh }: { data: Bootstrap; refresh: () => Promise<void> }) {
   const toast = useToast();
@@ -20,7 +20,7 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [payingId, setPayingId] = useState<number | null>(null);
   const paying = data.orders.find((o) => o.id === payingId);
-  const showPrices = data.me.role !== "workshop";
+  const showPrices = canSeePrices(data.me.role);
   const today = todayISO();
 
   const list = useMemo(() => {
@@ -114,7 +114,7 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
                       </button>
                     </>
                   )}
-                  {showPrices && (
+                  {showPrices && canDeliver(data.me.role) && (
                     <button onClick={() => undeliver(o)} className={linkBtn + (confirmId === o.id ? " font-semibold text-[#8A3C2F]" : "")}>
                       <Undo2 size={13} />
                       {confirmId === o.id ? "برای تأیید دوباره بزن" : "برگشت از تحویل"}

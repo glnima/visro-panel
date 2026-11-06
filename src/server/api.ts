@@ -10,6 +10,8 @@ import {
   canDeliver,
   canEditMaterials,
   canSeeInventory,
+  canSeeLedger,
+  canTakePayments,
   canWorkStage,
   type OptionKind,
   type OrderMode,
@@ -130,6 +132,8 @@ const DELIVERY: Role[] = ROLES.filter(canDeliver);
 const OFFICE: Role[] = ROLES.filter(canSeeInventory);
 const WAREHOUSE: Role[] = ROLES.filter(canEditMaterials);
 const SALES: Role[] = ["admin", "store"];
+const MONEY: Role[] = ROLES.filter(canTakePayments);
+const LEDGER: Role[] = ROLES.filter(canSeeLedger);
 const ADMIN: Role[] = ["admin"];
 
 const idParam = (ctx: Ctx, i = 0) => int(ctx.params[i], "شناسه", { min: 1 });
@@ -815,7 +819,7 @@ route("GET", "/api/audit", ADMIN, async (ctx) => {
   };
 });
 
-route("GET", "/api/reports/throughput", SALES, async (ctx) => {
+route("GET", "/api/reports/throughput", MONEY, async (ctx) => {
   const from = isoDate(ctx.url.searchParams.get("from"), "از تاریخ");
   const to = isoDate(ctx.url.searchParams.get("to"), "تا تاریخ");
   const rows = await ctx.q.query<{ stage: StageKey; n: number }>(
@@ -946,7 +950,7 @@ route("PATCH", "/api/options/:id", OFFICE, async (ctx) => {
 
 // ---------------------------------------------------------------- payments
 
-route("POST", "/api/orders/:id/payments", SALES, async (ctx) => {
+route("POST", "/api/orders/:id/payments", MONEY, async (ctx) => {
   const id = idParam(ctx);
   const current = await lockOrder(ctx.q, id);
   if (current.deleted_at) throw notFound("سفارش پیدا نشد");
@@ -960,13 +964,40 @@ async function setPaymentVoid(ctx: Ctx, voided: boolean) {
   if (!p) throw notFound("پرداخت پیدا نشد");
   await lockOrder(ctx.q, p.order_id);
   if (Boolean(p.voided_at) === voided) throw conflict(voided ? "این پرداخت قبلاً باطل شده" : "این پرداخت باطل نشده");
-  await ctx.q.query(`update payments set voided_at = ${voided ? "now()" : "null"} where id = $1`, [id]);
+  await ctx.q.query(`update payments set voided_at = ${voided ? "now()" : "null"}, voided_by = $2 where id = $1`, [id, voided ? ctx.me.id : null]);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: voided ? "payment_voided" : "payment_restored", orderId: p.order_id, details: { amount: p.amount } });
   return { ok: true };
 }
 
-route("POST", "/api/payments/:id/void", SALES, (ctx) => setPaymentVoid(ctx, true));
-route("POST", "/api/payments/:id/restore", SALES, (ctx) => setPaymentVoid(ctx, false));
+route("POST", "/api/payments/:id/void", MONEY, (ctx) => setPaymentVoid(ctx, true));
+route("POST", "/api/payments/:id/restore", MONEY, (ctx) => setPaymentVoid(ctx, false));
+
+// Every payment in a date range, voided ones and those on cancelled orders included.
+route("GET", "/api/payments", LEDGER, async (ctx) => {
+  const from = isoDate(ctx.url.searchParams.get("from"), "از تاریخ");
+  const to = isoDate(ctx.url.searchParams.get("to"), "تا تاریخ");
+  const rows = await ctx.q.query<{
+    id: number; code: string; customer: string; amount: number; method: PaymentMethod; paid_on: string; note: string;
+    by_name: string | null; voided_at: string | null; voided_by_name: string | null; deleted_at: string | null;
+  }>(
+    `select p.id, o.code, c.name as customer, p.amount, p.method, p.paid_on, p.note, u.display_name as by_name,
+            p.voided_at, v.display_name as voided_by_name, o.deleted_at
+       from payments p
+       join orders o on o.id = p.order_id
+       join customers c on c.id = o.customer_id
+       left join users u on u.id = p.created_by
+       left join users v on v.id = p.voided_by
+      where p.paid_on between $1 and $2
+      order by p.paid_on desc, p.id desc`,
+    [from, to]
+  );
+  return {
+    entries: rows.map((r) => ({
+      id: r.id, orderCode: r.code, customer: r.customer, amount: r.amount, method: r.method, paidOn: r.paid_on, note: r.note,
+      by: r.by_name, voidedAt: r.voided_at, voidedBy: r.voided_by_name, orderDeleted: r.deleted_at !== null,
+    })),
+  };
+});
 
 // ---------------------------------------------------------------- feedback
 

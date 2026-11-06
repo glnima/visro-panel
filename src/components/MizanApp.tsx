@@ -26,10 +26,10 @@ const TABS: { key: View; label: string; roles: Role[] }[] = [
   // everyone sees the production line; station workers see only that
   { key: "workshop", label: "خط تولید", roles: ROLES },
   { key: "inventory", label: "انبار", roles: ["admin", "store", "workshop"] },
-  { key: "accounting", label: "حسابداری", roles: ["admin", "store"] },
-  { key: "customers", label: "مشتری‌ها", roles: ["admin", "store"] },
-  { key: "history", label: "تاریخچه", roles: ["admin", "store", "workshop"] },
-  { key: "reports", label: "گزارش‌ها", roles: ["admin", "store"] },
+  { key: "accounting", label: "حسابداری", roles: ["admin", "store", "accountant"] },
+  { key: "customers", label: "مشتری‌ها", roles: ["admin", "store", "accountant"] },
+  { key: "history", label: "تاریخچه", roles: ["admin", "store", "accountant", "workshop"] },
+  { key: "reports", label: "گزارش‌ها", roles: ["admin", "store", "accountant"] },
   { key: "products", label: "محصولات", roles: ["admin"] },
   { key: "settings", label: "تنظیمات", roles: ["admin"] },
   { key: "audit", label: "رویدادها", roles: ["admin"] },
@@ -46,7 +46,7 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
     window.history.replaceState(null, "", window.location.pathname);
     return id;
   });
-  const [view, setView] = useState<View>(openOrderId ? "workshop" : tabs[0].key);
+  const [view, setView] = useState<View>(openOrderId ? "workshop" : me.role === "accountant" ? "accounting" : tabs[0].key);
   const { data, offline, refresh } = useMizanData();
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
