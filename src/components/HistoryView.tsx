@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { History, Printer, Search, Undo2 } from "lucide-react";
+import { History, Printer, Search, Undo2, Wallet } from "lucide-react";
 import JalaliDateInput from "./JalaliDateInput";
+import PaymentsDialog, { PayBadge } from "./PaymentsDialog";
 import { useToast } from "./Toast";
 import { Empty, PageTitle, cardCls, linkBtn } from "./ui";
 import { api, errorMessage, printUrl } from "@/lib/api";
@@ -17,6 +18,8 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [payingId, setPayingId] = useState<number | null>(null);
+  const paying = data.orders.find((o) => o.id === payingId);
   const showPrices = data.me.role !== "workshop";
   const today = todayISO();
 
@@ -103,6 +106,15 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
                     چاپ
                   </a>
                   {showPrices && (
+                    <>
+                      <PayBadge order={o} />
+                      <button onClick={() => setPayingId(o.id)} className={linkBtn}>
+                        <Wallet size={13} />
+                        پرداخت
+                      </button>
+                    </>
+                  )}
+                  {showPrices && (
                     <button onClick={() => undeliver(o)} className={linkBtn + (confirmId === o.id ? " font-semibold text-[#8A3C2F]" : "")}>
                       <Undo2 size={13} />
                       {confirmId === o.id ? "برای تأیید دوباره بزن" : "برگشت از تحویل"}
@@ -114,6 +126,7 @@ export default function HistoryView({ data, refresh }: { data: Bootstrap; refres
           );
         })}
       </div>
+      {paying && <PaymentsDialog order={paying} refresh={refresh} onClose={() => setPayingId(null)} />}
     </div>
   );
 }

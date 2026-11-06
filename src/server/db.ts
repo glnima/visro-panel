@@ -21,10 +21,12 @@ export interface Db extends Queryable {
 export const parseDate = (v: string) => v;
 export const parseTimestamp = (v: string) => new Date(v.replace(" ", "T").replace(/([+-]\d\d)$/, "$1:00")).toISOString();
 export const parseInt8 = (v: string) => Number(v);
-export const OID = { int8: 20, date: 1082, timestamptz: 1184 };
+export const parseNumeric = (v: string) => Number(v);
+export const OID = { int8: 20, numeric: 1700, date: 1082, timestamptz: 1184 };
 
 export const PGLITE_PARSERS = {
   [OID.int8]: (v: string) => parseInt8(v),
+  [OID.numeric]: (v: string) => parseNumeric(v),
   [OID.date]: (v: string) => parseDate(v),
   [OID.timestamptz]: (v: string) => parseTimestamp(v),
 };

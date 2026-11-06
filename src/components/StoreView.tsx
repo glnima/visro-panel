@@ -1,10 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowDownUp, ArrowUpLeft, Pencil, Printer, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, ArrowUpLeft, Pencil, Printer, Search, Trash2, Wallet } from "lucide-react";
 import OrderForm, { type OrderPayload } from "./OrderForm";
+import PaymentsDialog, { PayBadge } from "./PaymentsDialog";
 import { useToast } from "./Toast";
 import { Empty, Modal, PageTitle, cardCls, linkBtn } from "./ui";
+import { orderBalance } from "@/lib/accounting";
 import { api, errorMessage, printUrl } from "@/lib/api";
 import { daysBetween, todayISO } from "@/lib/dates";
 import { faDate, faNum, faPrice, faTime } from "@/lib/format";
@@ -23,7 +25,7 @@ import {
   type LedgerFilter,
   type LedgerSort,
 } from "@/lib/production";
-import { DELAY_REASONS, type Bootstrap, type Order } from "@/lib/types";
+import { DELAY_REASONS, type Bootstrap, type Order, type OrderMode } from "@/lib/types";
 
 const SORT_KEY = "mizan:ledger-sort";
 
@@ -49,6 +51,8 @@ type Props = {
 export default function StoreView({ data, refresh, highlightId, onJump, onFlash }: Props) {
   const toast = useToast();
   const [editing, setEditing] = useState<Order | null>(null);
+  const [payingId, setPayingId] = useState<number | null>(null);
+  const paying = data.orders.find((o) => o.id === payingId);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const today = todayISO();
@@ -85,15 +89,17 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
     [open, filter, sort, today]
   );
 
-  const create = async (payload: OrderPayload, ready: boolean) => {
+  const create = async (payload: OrderPayload, mode: OrderMode) => {
     try {
-      const { order } = await api<{ order: Order }>("POST", "/api/orders", { ...payload, ready });
+      const { order } = await api<{ order: Order }>("POST", "/api/orders", { ...payload, mode });
       await refresh();
       onFlash(order.id);
       toast.ok(
-        ready
-          ? `سفارش ${order.code} به‌عنوان آماده ثبت شد و توی «تحویل نهایی» کارگاه منتظره`
-          : `سفارش ${order.code} ثبت شد و به کارگاه ارسال شد`
+        mode === "sold"
+          ? `سفارش ${order.code} از فروشگاه فروخته و تحویل داده شد — توی «تاریخچه» هست`
+          : mode === "ready"
+            ? `سفارش ${order.code} از موجودی فروشگاه برداشته شد و توی «تحویل نهایی» منتظره`
+            : `سفارش ${order.code} ثبت شد و به کارگاه ارسال شد`
       );
       return true;
     } catch (e) {
@@ -154,6 +160,8 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
           categories={data.categories}
           customers={data.customers}
           orders={data.orders}
+          materials={data.materials}
+          options={data.options}
           onSubmit={create}
           onError={toast.error}
         />
@@ -260,6 +268,7 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
                 </div>
                 <div className="text-xs text-[#6B5E4F] mb-2">
                   {faPrice(totals.price)} تومان
+                  {orderBalance(o) > 0 && <span className="text-[#92400E] font-medium">، مانده {faPrice(orderBalance(o))}</span>}
                   {colors.length > 0 && <span> · {colors.map((it) => `${it.productName}: ${itemColors(it)}`).join("، ")}</span>}
                 </div>
                 {o.notes && <div className="text-xs text-[#8A7B60] mb-2">{o.notes}</div>}
@@ -278,7 +287,12 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
                     <span>تحویل: {faDate(o.requested)}</span>
                     <span className="text-[#8A7B60]">{currentStationText(o, data.stations)}</span>
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <PayBadge order={o} />
+                    <button onClick={() => setPayingId(o.id)} className={linkBtn}>
+                      <Wallet size={13} />
+                      پرداخت
+                    </button>
                     <button onClick={() => setEditing(o)} className={linkBtn}>
                       <Pencil size={13} />
                       ویرایش
@@ -310,13 +324,17 @@ export default function StoreView({ data, refresh, highlightId, onJump, onFlash 
         </div>
       </section>
 
+      {paying && <PaymentsDialog order={paying} refresh={refresh} onClose={() => setPayingId(null)} />}
+
       {editing && (
         <Modal title={`ویرایش سفارش ${editing.code}`} onClose={() => setEditing(null)} wide>
           <OrderForm
             products={data.products}
             categories={data.categories}
             customers={data.customers}
-          orders={data.orders}
+            orders={data.orders}
+            materials={data.materials}
+            options={data.options}
             initial={editing}
             onSubmit={save}
             onError={toast.error}

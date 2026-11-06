@@ -4,10 +4,16 @@ import { fullProduction, isOrderReady, itemStations, orderTotals, stageChangeErr
 import {
   DELAY_REASONS,
   MAX_PRODUCTS,
+  PAYMENT_METHODS,
   ROLES,
   STAGES,
   canDeliver,
+  canEditMaterials,
+  canSeeInventory,
   canWorkStage,
+  type OptionKind,
+  type OrderMode,
+  type PaymentMethod,
   type DelayReason,
   type Order,
   type Production,
@@ -36,6 +42,7 @@ import {
   bad,
   bool,
   conflict,
+  decimal,
   int,
   isoDate,
   notFound,
@@ -52,6 +59,7 @@ import {
   logEvent,
 } from "./repo";
 import { getPushService, type Audience, type PushMessage } from "./notify";
+import { moveStock, syncItemStock } from "./stock";
 
 // "cookie": normal server (httpOnly cookie). "header": the in-browser demo, where
 // scripts can't set cookies on a Request, so the token travels in x-mizan-session
@@ -119,6 +127,8 @@ const route = (method: string, path: string, access: Access, handler: Handler) =
 };
 
 const DELIVERY: Role[] = ROLES.filter(canDeliver);
+const OFFICE: Role[] = ROLES.filter(canSeeInventory);
+const WAREHOUSE: Role[] = ROLES.filter(canEditMaterials);
 const SALES: Role[] = ["admin", "store"];
 const ADMIN: Role[] = ["admin"];
 
@@ -218,14 +228,74 @@ async function productSnapshot(q: Queryable, productId: number) {
 
 const stageCols = (p: Production) => STAGES.map((s) => p[s]);
 
-async function insertItem(q: Queryable, orderId: number, position: number, it: ItemInput, production: Production) {
+async function insertItem(q: Queryable, orderId: number, position: number, it: ItemInput, production: Production): Promise<number> {
   const snap = await productSnapshot(q, it.productId);
-  await q.query(
+  const [row] = await q.query<{ id: number }>(
     `insert into order_items (order_id, position, product_id, product_name, unit_price, qty, fabric_color, wood_color,
                               ${STAGES.join(", ")})
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id`,
     [orderId, position, it.productId, snap.name, snap.price, it.qty, it.fabricColor, it.woodColor, ...stageCols(production)]
   );
+  return row.id;
+}
+
+// Takes finished pieces out of the shop; refuses to go below zero.
+async function takeReadyStock(q: Queryable, productId: number, qty: number) {
+  const rows = await q.query("update products set ready_stock = ready_stock - $2 where id = $1 and ready_stock >= $2 returning id", [productId, qty]);
+  if (rows[0]) return;
+  const [p] = await q.query<{ name: string; ready_stock: number }>("select name, ready_stock from products where id = $1", [productId]);
+  throw conflict(`از «${p?.name ?? "این مدل"}» فقط ${p?.ready_stock ?? 0} عدد آماده توی فروشگاه داریم — موجودی آماده رو توی بخش انبار اصلاح کن`);
+}
+
+// Warn the people who buy materials when an order pushes one to or below its minimum.
+async function notifyLowStock(ctx: Ctx, materialIds: number[]) {
+  if (materialIds.length === 0) return;
+  const low = await ctx.q.query<{ id: number; name: string; unit: string; stock: number }>(
+    "select id, name, unit, stock from materials where id = any($1::int[]) and (stock < 0 or (min_stock > 0 and stock <= min_stock))",
+    [materialIds]
+  );
+  for (const m of low) {
+    notify(ctx, { roles: ["admin", "workshop"], exceptUserId: ctx.me.id }, {
+      title: m.stock < 0 ? `کسری انبار: ${m.name}` : `${m.name} رو به اتمامه`,
+      body: `موجودی: ${m.stock} ${m.unit}`,
+      tag: `stock-${m.id}`,
+    });
+  }
+}
+
+function parseMethod(v: unknown): PaymentMethod {
+  if (typeof v !== "string" || !(v in PAYMENT_METHODS)) throw bad("روش پرداخت نامعتبره");
+  return v as PaymentMethod;
+}
+
+async function addPayment(
+  ctx: Ctx,
+  orderId: number,
+  p: { amount: number; method: PaymentMethod; paidOn: string; note: string }
+) {
+  const [{ total, paid }] = await ctx.q.query<{ total: number; paid: number }>(
+    `select (select coalesce(sum(qty * unit_price), 0)::float8 from order_items where order_id = $1) as total,
+            (select coalesce(sum(amount), 0)::float8 from payments where order_id = $1 and voided_at is null) as paid`,
+    [orderId]
+  );
+  if (p.amount > total - paid) throw conflict("مبلغ از مانده‌ی این سفارش بیشتره");
+  const [row] = await ctx.q.query<{ id: number }>(
+    "insert into payments (order_id, amount, method, paid_on, note, created_by) values ($1, $2, $3, $4, $5, $6) returning id",
+    [orderId, p.amount, p.method, p.paidOn, p.note, ctx.me.id]
+  );
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "payment_added", orderId, details: { amount: p.amount, method: p.method, note: p.note } });
+  return row.id;
+}
+
+function paymentFields(body: Body) {
+  const paidOn = body.paidOn ? isoDate(body.paidOn, "تاریخ پرداخت") : todayISO();
+  if (paidOn > todayISO()) throw bad("تاریخ پرداخت نمی‌تونه توی آینده باشه");
+  return {
+    amount: int(body.amount, "مبلغ", { min: 1, max: 1e15 }),
+    method: parseMethod(body.method ?? "cash"),
+    paidOn,
+    note: text(body.note, "توضیح", { max: 500 }),
+  };
 }
 
 function orderFields(body: Body) {
@@ -247,24 +317,39 @@ async function respondOrder(ctx: Ctx, id: number) {
 
 route("POST", "/api/orders", SALES, async (ctx) => {
   const f = orderFields(ctx.body);
-  const ready = ctx.body.ready === true;
+  const mode = (ctx.body.mode ?? "production") as OrderMode;
+  if (!["production", "ready", "sold"].includes(mode)) throw bad("نوع سفارش نامعتبره");
+  const fromStock = mode !== "production";
+  const today = todayISO();
+  const sold = mode === "sold";
   const customerId = await findOrCreateCustomer(ctx.q, f.customer);
   const [row] = await ctx.q.query<{ id: number }>(
-    `insert into orders (code, customer_id, order_date, requested, notes, created_by)
-     values ('SF-' || nextval('order_code_seq'), $1, $2, $3, $4, $5) returning id`,
-    [customerId, f.orderDate, f.requested, f.notes, ctx.me.id]
+    `insert into orders (code, customer_id, order_date, requested, notes, created_by, from_stock, delivered_at)
+     values ('SF-' || nextval('order_code_seq'), $1, $2, $3, $4, $5, $6, $7) returning id`,
+    // a piece handed over on the spot was promised for today
+    [customerId, f.orderDate, sold && f.orderDate <= today ? today : f.requested, f.notes, ctx.me.id, fromStock, sold ? today : null]
   );
-  const production = ready ? fullProduction() : { carpentry: false, zirkar: false, rangkar: false, tailor: false, ruyekoob: false };
-  for (const [i, it] of f.items.entries()) await insertItem(ctx.q, row.id, i, it, production);
-  await logEvent(ctx.q, { userId: ctx.me.id, kind: "created", orderId: row.id, details: { ready } });
+  const production = fromStock ? fullProduction() : { carpentry: false, zirkar: false, rangkar: false, tailor: false, ruyekoob: false };
+  const touched = new Set<number>();
+  for (const [i, it] of f.items.entries()) {
+    const itemId = await insertItem(ctx.q, row.id, i, it, production);
+    if (fromStock) await takeReadyStock(ctx.q, it.productId, it.qty);
+    else {
+      for (const m of await syncItemStock(ctx.q, { orderId: row.id, itemId, productId: it.productId, qty: it.qty, userId: ctx.me.id })) touched.add(m);
+    }
+  }
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "created", orderId: row.id, details: { mode } });
+  if (sold) await logEvent(ctx.q, { userId: ctx.me.id, kind: "delivered", orderId: row.id });
+  if (ctx.body.payment) await addPayment(ctx, row.id, paymentFields(asBody(ctx.body.payment)));
   const created = await loadOrder(ctx.q, { id: row.id }, false);
-  if (created) await notifyOrderProgress(ctx, null, created);
+  if (created && !sold) await notifyOrderProgress(ctx, null, created);
+  await notifyLowStock(ctx, [...touched]);
   return respondOrder(ctx, row.id);
 });
 
 async function lockOrder(q: Queryable, id: number) {
-  const rows = await q.query<{ id: number; version: number; delivered_at: string | null; deleted_at: string | null }>(
-    "select id, version, delivered_at, deleted_at from orders where id = $1 for update",
+  const rows = await q.query<{ id: number; version: number; delivered_at: string | null; deleted_at: string | null; from_stock: boolean }>(
+    "select id, version, delivered_at, deleted_at, from_stock from orders where id = $1 for update",
     [id]
   );
   if (!rows[0]) throw notFound("سفارش پیدا نشد");
@@ -282,6 +367,12 @@ route("PATCH", "/api/orders/:id", SALES, async (ctx) => {
     throw conflict("یه نفر دیگه همین الان این سفارش رو تغییر داد — صفحه رو تازه کن و دوباره امتحان کن");
   }
   const f = orderFields(ctx.body);
+  const before = await ctx.q.query<{ id: number; product_id: number | null; qty: number }>("select id, product_id, qty from order_items where order_id = $1", [id]);
+  if (current.from_stock) {
+    // these pieces already left shop stock; changing them would need a stock recount
+    const same = f.items.length === before.length && f.items.every((it) => before.some((b) => b.id === it.id && b.product_id === it.productId && b.qty === it.qty));
+    if (!same) throw conflict("مدل و تعداد سفارشی که از موجودی فروشگاه فروخته شده عوض نمی‌شه — حذفش کن و دوباره ثبت کن");
+  }
   const customerId = await findOrCreateCustomer(ctx.q, f.customer);
   await ctx.q.query(
     "update orders set customer_id = $2, order_date = $3, requested = $4, notes = $5, version = version + 1 where id = $1",
@@ -294,9 +385,14 @@ route("PATCH", "/api/orders/:id", SALES, async (ctx) => {
   );
   const existingIds = new Map(existing.map((r) => [r.id, r.product_id]));
   const keep = new Set<number>();
+  const touched = new Set<number>();
+  const sync = async (itemId: number, productId: number | null, qty: number) => {
+    for (const m of await syncItemStock(ctx.q, { orderId: id, itemId, productId, qty, userId: ctx.me.id })) touched.add(m);
+  };
   for (const [i, it] of f.items.entries()) {
     if (it.id === null) {
-      await insertItem(ctx.q, id, i, it, { carpentry: false, zirkar: false, rangkar: false, tailor: false, ruyekoob: false });
+      const itemId = await insertItem(ctx.q, id, i, it, { carpentry: false, zirkar: false, rangkar: false, tailor: false, ruyekoob: false });
+      await sync(itemId, it.productId, it.qty);
       continue;
     }
     if (!existingIds.has(it.id)) throw bad("قلم نامعتبره");
@@ -314,11 +410,16 @@ route("PATCH", "/api/orders/:id", SALES, async (ctx) => {
         [it.id, i, it.qty, it.fabricColor, it.woodColor, it.productId, snap.name, snap.price]
       );
     }
+    // unchanged lines keep what they took, even if the recipe has changed since
+    const was = before.find((b) => b.id === it.id);
+    if (!current.from_stock && (was?.product_id !== it.productId || was?.qty !== it.qty)) await sync(it.id, it.productId, it.qty);
   }
   const removed = [...existingIds.keys()].filter((k) => !keep.has(k));
+  for (const itemId of removed) await sync(itemId, null, 0);
   if (removed.length) await ctx.q.query("delete from order_items where id = any($1::int[])", [removed]);
 
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "edited", orderId: id });
+  await notifyLowStock(ctx, [...touched]);
   return respondOrder(ctx, id);
 });
 
@@ -327,13 +428,25 @@ route("DELETE", "/api/orders/:id", SALES, async (ctx) => {
   const current = await lockOrder(ctx.q, id);
   if (current.deleted_at) throw notFound("سفارش پیدا نشد");
   await ctx.q.query("update orders set deleted_at = now(), version = version + 1 where id = $1", [id]);
+  // a cancelled order gives back what it took: materials, or finished pieces to the shop
+  const items = await ctx.q.query<{ id: number; product_id: number | null; qty: number }>("select id, product_id, qty from order_items where order_id = $1", [id]);
+  for (const it of items) {
+    if (current.from_stock) await ctx.q.query("update products set ready_stock = ready_stock + $2 where id = $1", [it.product_id, it.qty]);
+    else await syncItemStock(ctx.q, { orderId: id, itemId: it.id, productId: it.product_id, qty: 0, userId: ctx.me.id });
+  }
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "deleted", orderId: id });
   return { ok: true };
 });
 
 route("POST", "/api/orders/:id/restore", SALES, async (ctx) => {
   const id = idParam(ctx);
-  await lockOrder(ctx.q, id);
+  const current = await lockOrder(ctx.q, id);
+  if (!current.deleted_at) throw conflict("این سفارش حذف نشده");
+  const items = await ctx.q.query<{ id: number; product_id: number | null; qty: number }>("select id, product_id, qty from order_items where order_id = $1", [id]);
+  for (const it of items) {
+    if (current.from_stock && it.product_id) await takeReadyStock(ctx.q, it.product_id, it.qty);
+    else if (!current.from_stock) await syncItemStock(ctx.q, { orderId: id, itemId: it.id, productId: it.product_id, qty: it.qty, userId: ctx.me.id });
+  }
   await ctx.q.query("update orders set deleted_at = null, version = version + 1 where id = $1", [id]);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "restored", orderId: id });
   return respondOrder(ctx, id);
@@ -524,6 +637,21 @@ async function assertCategory(q: Queryable, id: number) {
   if (!rows[0]) throw bad("دسته نامعتبره");
 }
 
+// A product's recipe. Orders already registered keep what they took.
+async function replaceBom(q: Queryable, productId: number, raw: unknown) {
+  const lines = array(raw, "مواد لازم", 100).map((l) => {
+    const b = asBody(l);
+    return { materialId: int(b.materialId, "ماده", { min: 1 }), qty: decimal(b.qty, "مقدار", { min: 0.001, max: 1e6 }) };
+  });
+  if (new Set(lines.map((l) => l.materialId)).size !== lines.length) throw bad("یه ماده دو بار توی لیست اومده");
+  await q.query("delete from product_materials where product_id = $1", [productId]);
+  for (const l of lines) {
+    const found = await q.query("select 1 from materials where id = $1", [l.materialId]);
+    if (!found[0]) throw bad("ماده نامعتبره");
+    await q.query("insert into product_materials (product_id, material_id, qty) values ($1, $2, $3)", [productId, l.materialId, l.qty]);
+  }
+}
+
 route("POST", "/api/products", ADMIN, async (ctx) => {
   const name = text(ctx.body.name, "نام محصول", { required: true, max: 120 });
   const categoryId = int(ctx.body.categoryId, "دسته", { min: 1 });
@@ -535,6 +663,7 @@ route("POST", "/api/products", ADMIN, async (ctx) => {
     "insert into products (name, category_id, price) values ($1, $2, $3) returning id",
     [name, categoryId, price]
   );
+  if (ctx.body.bom !== undefined) await replaceBom(ctx.q, row.id, ctx.body.bom);
   await logEvent(ctx.q, { userId: ctx.me.id, kind: "product_added", details: { name, price } });
   return { id: row.id };
 });
@@ -559,6 +688,7 @@ route("PATCH", "/api/products/:id", ADMIN, async (ctx) => {
   await ctx.q.query("update products set name = $2, category_id = $3, price = $4, active = $5 where id = $1", [
     id, name, categoryId, price, active,
   ]);
+  if (b.bom !== undefined) await replaceBom(ctx.q, id, b.bom);
   const kind = active === cur.active ? "product_edited" : active ? "product_restored" : "product_deleted";
   await logEvent(ctx.q, { userId: ctx.me.id, kind, details: { name, price } });
   return { ok: true };
@@ -700,6 +830,143 @@ route("GET", "/api/reports/throughput", SALES, async (ctx) => {
   for (const r of rows) byStage[r.stage] = r.n;
   return { byStage };
 });
+
+// ---------------------------------------------------------------- warehouse
+
+route("POST", "/api/materials", WAREHOUSE, async (ctx) => {
+  const name = normalizeName(text(ctx.body.name, "نام ماده", { required: true, max: 120 }));
+  const unit = text(ctx.body.unit, "واحد", { required: true, max: 20 });
+  const stock = decimal(ctx.body.stock ?? 0, "موجودی");
+  const minStock = decimal(ctx.body.minStock ?? 0, "حداقل موجودی");
+  const rows = await ctx.q.query<{ id: number }>(
+    "insert into materials (name, unit, min_stock) values ($1, $2, $3) on conflict (name) do nothing returning id",
+    [name, unit, minStock]
+  );
+  if (!rows[0]) throw conflict("این ماده توی لیست هست");
+  if (stock > 0) await moveStock(ctx.q, { materialId: rows[0].id, delta: stock, kind: "adjust", note: "موجودی اولیه", userId: ctx.me.id });
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "material_added", details: { name } });
+  return { id: rows[0].id };
+});
+
+route("PATCH", "/api/materials/:id", WAREHOUSE, async (ctx) => {
+  const id = idParam(ctx);
+  const [cur] = await ctx.q.query<{ name: string; unit: string; min_stock: number; active: boolean }>("select name, unit, min_stock, active from materials where id = $1", [id]);
+  if (!cur) throw notFound("ماده پیدا نشد");
+  const b = ctx.body;
+  const name = b.name === undefined ? cur.name : normalizeName(text(b.name, "نام ماده", { required: true, max: 120 }));
+  const clash = await ctx.q.query("select 1 from materials where name = $1 and id <> $2", [name, id]);
+  if (clash.length) throw conflict("این ماده توی لیست هست");
+  await ctx.q.query("update materials set name = $2, unit = $3, min_stock = $4, active = $5 where id = $1", [
+    id,
+    name,
+    b.unit === undefined ? cur.unit : text(b.unit, "واحد", { required: true, max: 20 }),
+    b.minStock === undefined ? cur.min_stock : decimal(b.minStock, "حداقل موجودی"),
+    b.active === undefined ? cur.active : bool(b.active, "وضعیت"),
+  ]);
+  return { ok: true };
+});
+
+// Goods received (purchase: qty added) or a stock count (adjust: setTo is what's really there).
+route("POST", "/api/materials/:id/stock", WAREHOUSE, async (ctx) => {
+  const id = idParam(ctx);
+  const [cur] = await ctx.q.query<{ stock: number; name: string }>("select stock, name from materials where id = $1 for update", [id]);
+  if (!cur) throw notFound("ماده پیدا نشد");
+  const note = text(ctx.body.note, "توضیح", { max: 300 });
+  if (ctx.body.kind === "purchase") {
+    await moveStock(ctx.q, { materialId: id, delta: decimal(ctx.body.qty, "مقدار", { min: 0.001 }), kind: "purchase", note, userId: ctx.me.id });
+  } else if (ctx.body.kind === "adjust") {
+    const delta = Math.round((decimal(ctx.body.setTo, "موجودی واقعی") - cur.stock) * 1000) / 1000;
+    if (delta !== 0) await moveStock(ctx.q, { materialId: id, delta, kind: "adjust", note, userId: ctx.me.id });
+  } else throw bad("نوع تغییر نامعتبره");
+  return { ok: true };
+});
+
+route("GET", "/api/materials/:id/movements", OFFICE, async (ctx) => {
+  const rows = await ctx.q.query<{ id: number; delta: number; kind: "purchase"; note: string; at: string; code: string | null; user_name: string | null }>(
+    `select m.id, m.delta, m.kind, m.note, m.at, o.code, u.display_name as user_name
+       from stock_movements m
+       left join orders o on o.id = m.order_id
+       left join users u on u.id = m.user_id
+      where m.material_id = $1
+      order by m.id desc limit 200`,
+    [idParam(ctx)]
+  );
+  return { movements: rows.map((r) => ({ id: r.id, delta: r.delta, kind: r.kind, note: r.note, at: r.at, orderCode: r.code, user: r.user_name })) };
+});
+
+// Finished pieces in the shop: built for stock (+) or counted / taken out (-).
+route("POST", "/api/products/:id/ready", OFFICE, async (ctx) => {
+  const id = idParam(ctx);
+  const delta = int(ctx.body.delta, "تعداد", { min: -100000, max: 100000 });
+  const rows = await ctx.q.query<{ name: string; ready_stock: number }>(
+    "update products set ready_stock = ready_stock + $2 where id = $1 and ready_stock + $2 >= 0 returning name, ready_stock",
+    [id, delta]
+  );
+  if (!rows[0]) throw conflict("موجودی آماده نمی‌تونه منفی بشه");
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: "ready_stock_changed", details: { name: rows[0].name, delta, stock: rows[0].ready_stock } });
+  return { readyStock: rows[0].ready_stock };
+});
+
+// ---------------------------------------------------------------- fabric and wood lists
+
+const parseOptionKind = (v: unknown): OptionKind => {
+  if (v !== "fabric" && v !== "wood") throw bad("نوع نامعتبره");
+  return v;
+};
+
+route("POST", "/api/options", OFFICE, async (ctx) => {
+  const kind = parseOptionKind(ctx.body.kind);
+  const name = normalizeName(text(ctx.body.name, "نام", { required: true, max: 100 }));
+  // adding a name that was removed earlier brings it back
+  const rows = await ctx.q.query<{ id: number }>(
+    `insert into catalog_options (kind, name) values ($1, $2)
+       on conflict (kind, name) do update set active = true where not catalog_options.active
+     returning id`,
+    [kind, name]
+  );
+  if (!rows[0]) throw conflict("این مورد توی لیست هست");
+  return { id: rows[0].id };
+});
+
+route("PATCH", "/api/options/:id", OFFICE, async (ctx) => {
+  const id = idParam(ctx);
+  const [cur] = await ctx.q.query<{ kind: OptionKind; name: string; active: boolean }>("select kind, name, active from catalog_options where id = $1", [id]);
+  if (!cur) throw notFound("پیدا نشد");
+  const name = ctx.body.name === undefined ? cur.name : normalizeName(text(ctx.body.name, "نام", { required: true, max: 100 }));
+  const clash = await ctx.q.query("select 1 from catalog_options where kind = $1 and name = $2 and id <> $3", [cur.kind, name, id]);
+  if (clash.length) throw conflict("این مورد توی لیست هست");
+  // past orders keep the text they were sold with
+  await ctx.q.query("update catalog_options set name = $2, active = $3 where id = $1", [
+    id,
+    name,
+    ctx.body.active === undefined ? cur.active : bool(ctx.body.active, "وضعیت"),
+  ]);
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------- payments
+
+route("POST", "/api/orders/:id/payments", SALES, async (ctx) => {
+  const id = idParam(ctx);
+  const current = await lockOrder(ctx.q, id);
+  if (current.deleted_at) throw notFound("سفارش پیدا نشد");
+  const paymentId = await addPayment(ctx, id, paymentFields(ctx.body));
+  return { id: paymentId };
+});
+
+async function setPaymentVoid(ctx: Ctx, voided: boolean) {
+  const id = idParam(ctx);
+  const [p] = await ctx.q.query<{ order_id: number; amount: number; voided_at: string | null }>("select order_id, amount, voided_at from payments where id = $1", [id]);
+  if (!p) throw notFound("پرداخت پیدا نشد");
+  await lockOrder(ctx.q, p.order_id);
+  if (Boolean(p.voided_at) === voided) throw conflict(voided ? "این پرداخت قبلاً باطل شده" : "این پرداخت باطل نشده");
+  await ctx.q.query(`update payments set voided_at = ${voided ? "now()" : "null"} where id = $1`, [id]);
+  await logEvent(ctx.q, { userId: ctx.me.id, kind: voided ? "payment_voided" : "payment_restored", orderId: p.order_id, details: { amount: p.amount } });
+  return { ok: true };
+}
+
+route("POST", "/api/payments/:id/void", SALES, (ctx) => setPaymentVoid(ctx, true));
+route("POST", "/api/payments/:id/restore", SALES, (ctx) => setPaymentVoid(ctx, false));
 
 // ---------------------------------------------------------------- feedback
 

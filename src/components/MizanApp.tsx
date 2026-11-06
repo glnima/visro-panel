@@ -2,11 +2,13 @@
 
 import { useCallback, useRef, useState } from "react";
 import { FlaskConical, LogOut, RotateCcw, WifiOff } from "lucide-react";
+import AccountingView from "./AccountingView";
 import AuditView from "./AuditView";
 import CustomersView from "./CustomersView";
 import { InstallButton, NotificationsButton } from "./AppInstall";
 import { FeedbackButton, FeedbackView } from "./Feedback";
 import HistoryView from "./HistoryView";
+import InventoryView from "./InventoryView";
 import ProductsView from "./ProductsView";
 import ReportsView from "./ReportsView";
 import SettingsView from "./SettingsView";
@@ -17,12 +19,14 @@ import { DEMO, errorMessage } from "@/lib/api";
 import { ROLES, ROLE_LABELS, type Role, type User } from "@/lib/types";
 import { useMizanData } from "@/lib/useMizanData";
 
-type View = "store" | "workshop" | "customers" | "history" | "reports" | "products" | "settings" | "audit" | "feedback";
+type View = "store" | "workshop" | "inventory" | "accounting" | "customers" | "history" | "reports" | "products" | "settings" | "audit" | "feedback";
 
 const TABS: { key: View; label: string; roles: Role[] }[] = [
   { key: "store", label: "فروشگاه", roles: ["admin", "store"] },
   // everyone sees the production line; station workers see only that
   { key: "workshop", label: "خط تولید", roles: ROLES },
+  { key: "inventory", label: "انبار", roles: ["admin", "store", "workshop"] },
+  { key: "accounting", label: "حسابداری", roles: ["admin", "store"] },
   { key: "customers", label: "مشتری‌ها", roles: ["admin", "store"] },
   { key: "history", label: "تاریخچه", roles: ["admin", "store", "workshop"] },
   { key: "reports", label: "گزارش‌ها", roles: ["admin", "store"] },
@@ -145,6 +149,10 @@ export default function MizanApp({ me, onLogout }: { me: User; onLogout: () => v
           <StoreView data={data} refresh={refresh} highlightId={highlightId} onJump={jumpToOrder} onFlash={flash} />
         ) : view === "workshop" ? (
           <ProductionView data={data} refresh={refresh} highlightId={highlightId} openOrderId={openOrderId} />
+        ) : view === "inventory" ? (
+          <InventoryView data={data} refresh={refresh} />
+        ) : view === "accounting" ? (
+          <AccountingView data={data} refresh={refresh} />
         ) : view === "customers" ? (
           <CustomersView data={data} refresh={refresh} />
         ) : view === "history" ? (

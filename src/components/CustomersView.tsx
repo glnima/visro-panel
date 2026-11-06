@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { ChevronDown, Pencil, Plus, Search, Users } from "lucide-react";
 import { useToast } from "./Toast";
 import { Empty, Modal, PageTitle, cardCls, inputCls, labelCls, linkBtn, primaryBtn } from "./ui";
+import { orderBalance } from "@/lib/accounting";
 import { api, errorMessage } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faNum, faPrice } from "@/lib/format";
@@ -25,7 +26,13 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
       .filter((c) => !q || c.name.includes(q) || c.phone.includes(q))
       .map((c) => {
         const orders = data.orders.filter((o) => o.customerId === c.id).sort((a, b) => b.orderDate.localeCompare(a.orderDate));
-        return { c, orders, total: orders.reduce((s, o) => s + orderTotals(o).price, 0), last: orders[0]?.orderDate };
+        return {
+          c,
+          orders,
+          total: orders.reduce((s, o) => s + orderTotals(o).price, 0),
+          balance: orders.reduce((s, o) => s + orderBalance(o), 0),
+          last: orders[0]?.orderDate,
+        };
       })
       .sort((a, b) => (b.last ?? "").localeCompare(a.last ?? "") || a.c.name.localeCompare(b.c.name, "fa"));
   }, [data.customers, data.orders, query]);
@@ -64,7 +71,7 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
 
       <div className={cardCls + " overflow-hidden"}>
         {rows.length === 0 && <Empty>مشتری‌ای پیدا نشد</Empty>}
-        {rows.map(({ c, orders, total, last }) => (
+        {rows.map(({ c, orders, total, balance, last }) => (
           <div key={c.id} className="border-b border-[#E4DCC8] last:border-0">
             <div className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
               <button onClick={() => setOpen(open === c.id ? null : c.id)} className="flex items-center gap-2 text-right">
@@ -77,6 +84,7 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
               <div className="flex items-center gap-4 text-xs text-[#6B5E4F]">
                 <span>{faNum(orders.length)} سفارش</span>
                 <span>{faPrice(total)} تومان</span>
+                {balance > 0 && <span className="font-medium text-[#92400E]">مانده {faPrice(balance)}</span>}
                 {last && <span>آخرین: {faDate(last)}</span>}
                 <button onClick={() => edit(c)} className={linkBtn}>
                   <Pencil size={13} />

@@ -1,11 +1,16 @@
 import {
   STAGES,
   canSeePrices as roleSeesPrices,
+  canSeeInventory,
   type Bootstrap,
+  type CatalogOption,
   type Category,
   type Customer,
   type Delay,
   type DelayReason,
+  type Material,
+  type Payment,
+  type PaymentMethod,
   type Order,
   type OrderItem,
   type Product,
@@ -29,6 +34,7 @@ type OrderRow = {
   delivered_at: string | null;
   notes: string;
   version: number;
+  from_stock: boolean;
 };
 
 type ItemRow = {
@@ -57,7 +63,7 @@ type DelayRow = {
 
 const ORDER_SELECT = `
   select o.id, o.code, o.customer_id, c.name as customer, o.order_date, o.requested,
-         o.registered_at, o.delivered_at, o.notes, o.version
+         o.registered_at, o.delivered_at, o.notes, o.version, o.from_stock
     from orders o join customers c on c.id = o.customer_id`;
 
 function toItem(r: ItemRow, prices: boolean, names: Map<number, string>, delays: Delay[]): OrderItem {
@@ -118,6 +124,23 @@ async function attachItems(q: Queryable, rows: OrderRow[], prices: boolean): Pro
     list.push(toItem(it, prices, names, delaysByItem.get(it.id) ?? []));
     byOrder.set(it.order_id, list);
   }
+  const payments = new Map<number, Payment[]>();
+  if (prices) {
+    const rows2 = await q.query<{
+      id: number; order_id: number; amount: number; method: PaymentMethod; paid_on: string; note: string; by_name: string | null;
+    }>(
+      `select p.id, p.order_id, p.amount, p.method, p.paid_on, p.note, u.display_name as by_name
+         from payments p left join users u on u.id = p.created_by
+        where p.voided_at is null and p.order_id = any($1::int[])
+        order by p.paid_on, p.id`,
+      [rows.map((r) => r.id)]
+    );
+    for (const p of rows2) {
+      const list = payments.get(p.order_id) ?? [];
+      list.push({ id: p.id, amount: p.amount, method: p.method, paidOn: p.paid_on, note: p.note, by: p.by_name });
+      payments.set(p.order_id, list);
+    }
+  }
   return rows.map((r) => ({
     id: r.id,
     code: r.code,
@@ -130,6 +153,8 @@ async function attachItems(q: Queryable, rows: OrderRow[], prices: boolean): Pro
     deliveredAt: r.delivered_at,
     notes: r.notes,
     version: r.version,
+    fromStock: r.from_stock,
+    payments: payments.get(r.id) ?? [],
   }));
 }
 
@@ -161,16 +186,32 @@ export async function loadCategories(q: Queryable): Promise<Category[]> {
 }
 
 export async function loadProducts(q: Queryable, prices: boolean): Promise<Product[]> {
-  const rows = await q.query<{ id: number; name: string; category_id: number; price: number; active: boolean }>(
-    "select id, name, category_id, price, active from products order by id"
-  );
+  const [rows, bom] = await Promise.all([
+    q.query<{ id: number; name: string; category_id: number; price: number; active: boolean; ready_stock: number }>(
+      "select id, name, category_id, price, active, ready_stock from products order by id"
+    ),
+    q.query<{ product_id: number; material_id: number; qty: number }>("select product_id, material_id, qty from product_materials"),
+  ]);
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
     categoryId: r.category_id,
     price: prices ? r.price : null,
     active: r.active,
+    readyStock: r.ready_stock,
+    bom: bom.filter((b) => b.product_id === r.id).map((b) => ({ materialId: b.material_id, qty: b.qty })),
   }));
+}
+
+export async function loadMaterials(q: Queryable): Promise<Material[]> {
+  const rows = await q.query<{ id: number; name: string; unit: string; stock: number; min_stock: number; active: boolean }>(
+    "select id, name, unit, stock, min_stock, active from materials order by name"
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, unit: r.unit, stock: r.stock, minStock: r.min_stock, active: r.active }));
+}
+
+export async function loadOptions(q: Queryable): Promise<CatalogOption[]> {
+  return q.query<CatalogOption>("select id, kind, name, active from catalog_options order by kind, name");
 }
 
 export async function loadCustomers(q: Queryable): Promise<Customer[]> {
@@ -188,15 +229,18 @@ export async function bumpVersion(q: Queryable): Promise<void> {
 
 export async function loadBootstrap(q: Queryable, me: User): Promise<Bootstrap> {
   const prices = canSeePrices(me);
-  const [version, stations, categories, products, customers, orders] = await Promise.all([
+  const warehouse = canSeeInventory(me.role);
+  const [version, stations, categories, products, customers, orders, materials, options] = await Promise.all([
     getVersion(q),
     loadStations(q),
     loadCategories(q),
     loadProducts(q, prices),
     prices ? loadCustomers(q) : Promise.resolve([]),
     loadOrders(q, prices),
+    warehouse ? loadMaterials(q) : Promise.resolve([]),
+    warehouse ? loadOptions(q) : Promise.resolve([]),
   ]);
-  return { me, version, stations, categories, products, customers, orders };
+  return { me, version, stations, categories, products, customers, orders, materials, options };
 }
 
 export async function logEvent(
