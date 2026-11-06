@@ -9,7 +9,7 @@ import { api, errorMessage } from "@/lib/api";
 import { todayISO } from "@/lib/dates";
 import { faDate, faNum, faPrice } from "@/lib/format";
 import { orderTotals, statusOf, toneColor } from "@/lib/production";
-import type { Bootstrap, Customer } from "@/lib/types";
+import { canEditCustomers, type Bootstrap, type Customer } from "@/lib/types";
 
 type Draft = { id: number | null; name: string; phone: string; notes: string };
 
@@ -19,6 +19,7 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
   const [open, setOpen] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const today = todayISO();
+  const editable = canEditCustomers(data.me.role);
 
   const rows = useMemo(() => {
     const q = query.trim();
@@ -58,10 +59,12 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
     <div>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <PageTitle icon={<Users size={18} />} title={`مشتری‌ها (${faNum(data.customers.length)})`} subtitle="هر مشتری با سابقه‌ی سفارش‌هاش — با ثبت سفارش برای اسم جدید، مشتری خودکار ساخته می‌شه" />
-        <button onClick={() => setDraft({ id: null, name: "", phone: "", notes: "" })} className={primaryBtn}>
-          <Plus size={15} />
-          مشتری جدید
-        </button>
+        {editable && (
+          <button onClick={() => setDraft({ id: null, name: "", phone: "", notes: "" })} className={primaryBtn}>
+            <Plus size={15} />
+            مشتری جدید
+          </button>
+        )}
       </div>
 
       <label className="mb-3 flex items-center gap-2 rounded-lg border border-[#D9CDB6] bg-[#F7F2E7] px-3 py-2">
@@ -86,10 +89,12 @@ export default function CustomersView({ data, refresh }: { data: Bootstrap; refr
                 <span>{faPrice(total)} تومان</span>
                 {balance > 0 && <span className="font-medium text-[#92400E]">مانده {faPrice(balance)}</span>}
                 {last && <span>آخرین: {faDate(last)}</span>}
-                <button onClick={() => edit(c)} className={linkBtn}>
-                  <Pencil size={13} />
-                  ویرایش
-                </button>
+                {editable && (
+                  <button onClick={() => edit(c)} className={linkBtn}>
+                    <Pencil size={13} />
+                    ویرایش
+                  </button>
+                )}
               </div>
             </div>
             {open === c.id && (

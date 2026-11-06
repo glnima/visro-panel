@@ -3,13 +3,14 @@ export type StageKey = (typeof STAGES)[number];
 export type StationKey = StageKey | "final";
 
 // A station role (e.g. "carpentry") can only act on its own stage.
-export type Role = "admin" | "store" | "workshop" | StageKey;
+export type Role = "admin" | "store" | "accountant" | "workshop" | StageKey;
 
-export const ROLES: Role[] = ["admin", "store", "workshop", ...STAGES];
+export const ROLES: Role[] = ["admin", "store", "accountant", "workshop", ...STAGES];
 
 export const ROLE_LABELS: Record<Role, string> = {
   admin: "مدیر",
   store: "فروشگاه",
+  accountant: "حسابدار",
   workshop: "سرپرست کارگاه",
   carpentry: "نجاری",
   zirkar: "زیرکار",
@@ -26,7 +27,16 @@ export const canWorkStage = (role: Role, stage: StageKey) => role === "admin" ||
 // Only the store, admin and supervisor hand orders over.
 export const canDeliver = (role: Role) => role === "admin" || role === "store" || role === "workshop";
 
-export const canSeePrices = (role: Role) => role === "admin" || role === "store";
+export const canSeePrices = (role: Role) => role === "admin" || role === "store" || role === "accountant";
+
+// Recording payments; everyone who sees money may do this.
+export const canTakePayments = canSeePrices;
+
+// The full payments ledger, including voided payments.
+export const canSeeLedger = (role: Role) => role === "admin" || role === "accountant";
+
+// The accountant reads customers but doesn't change them.
+export const canEditCustomers = (role: Role) => role === "admin" || role === "store";
 
 // The warehouse: everyone in the office and the supervisor can see it; only
 // the admin and supervisor receive or correct raw materials.
@@ -98,6 +108,20 @@ export const PAYMENT_METHODS = {
   cheque: "چک",
 } as const;
 export type PaymentMethod = keyof typeof PAYMENT_METHODS;
+
+export type LedgerEntry = {
+  id: number;
+  orderCode: string;
+  customer: string;
+  amount: number;
+  method: PaymentMethod;
+  paidOn: string;
+  note: string;
+  by: string | null;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  orderDeleted: boolean;
+};
 
 export type Payment = {
   id: number;

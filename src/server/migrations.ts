@@ -227,4 +227,14 @@ export const MIGRATIONS: { id: number; sql: string[] }[] = [
         select distinct 'wood', wood_color from order_items where wood_color <> ''`,
     ],
   },
+  {
+    id: 6,
+    sql: [
+      `alter table users drop constraint users_role_check`,
+      `alter table users add constraint users_role_check
+        check (role in ('admin', 'store', 'accountant', 'workshop', 'carpentry', 'zirkar', 'rangkar', 'tailor', 'ruyekoob'))`,
+      // who voided a payment, for the ledger
+      `alter table payments add column voided_by int references users(id) on delete set null`,
+    ],
+  },
 ];

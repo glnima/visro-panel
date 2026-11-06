@@ -1,4 +1,4 @@
-import type { Material, Order, Product } from "./types";
+import { PAYMENT_METHODS, type LedgerEntry, type Material, type Order, type Product } from "./types";
 import { orderTotals } from "./production";
 
 // ---- money ----
@@ -59,4 +59,42 @@ export function readyShortages(lines: { productId: number; qty: number }[], prod
     const product = products.find((p) => p.id === id);
     return product && amount > product.readyStock ? [{ product, need: amount }] : [];
   });
+}
+
+// ---- the payments ledger ----
+
+// Only money that really counts: not voided, not on a cancelled order.
+export const ledgerCounts = (e: LedgerEntry) => !e.voidedAt && !e.orderDeleted;
+
+export function ledgerTotals(entries: LedgerEntry[]): { total: number; byMethod: { method: LedgerEntry["method"]; amount: number }[] } {
+  const counted = entries.filter(ledgerCounts);
+  const byMethod = (Object.keys(PAYMENT_METHODS) as LedgerEntry["method"][])
+    .map((method) => ({ method, amount: counted.filter((e) => e.method === method).reduce((s, e) => s + e.amount, 0) }))
+    .filter((m) => m.amount > 0);
+  return { total: counted.reduce((s, e) => s + e.amount, 0), byMethod };
+}
+
+// A spreadsheet treats a cell starting with = + - @ as a formula, so names and
+// notes are neutralised before they reach Excel.
+function csvCell(v: string | number): string {
+  let s = String(v);
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// CSV for Excel: the BOM makes it read Persian text correctly.
+export function ledgerCsv(entries: LedgerEntry[], jalaliDate: (iso: string) => string): string {
+  const header = ["تاریخ", "تاریخ میلادی", "سفارش", "مشتری", "مبلغ (تومان)", "روش", "توضیح", "ثبت‌کننده", "وضعیت"];
+  const rows = entries.map((e) => [
+    jalaliDate(e.paidOn),
+    e.paidOn,
+    e.orderCode,
+    e.customer,
+    e.amount,
+    PAYMENT_METHODS[e.method],
+    e.note,
+    e.by ?? "",
+    e.voidedAt ? `باطل${e.voidedBy ? ` (${e.voidedBy})` : ""}` : e.orderDeleted ? "سفارش حذف شده" : "معتبر",
+  ]);
+  return "\uFEFF" + [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
 }

@@ -128,6 +128,7 @@ Mizan is a PWA (installable web app): it installs from the browser and opens lik
 | Role | Sees | Can do |
 |---|---|---|
 | **فروشگاه (store)** | Store, Workshop (read-only), Customers, History, Reports — with prices | Create / edit / delete orders, manage customers, mark delivery |
+| **حسابدار (accountant)** | Accounting (opens here), payments ledger, Customers, History, Reports, Production line (read-only) — with prices | Record, void and restore payments, export the ledger to Excel. Can't change orders, production, delivery, products, stock or customers |
 | **سرپرست کارگاه (workshop)** | Production line, History — **no prices, no customer list** (the server never sends them) | Mark any stage done / undo, report or clear delays on any stage, mark delivery, print workshop sheets |
 | **نجاری / زیرکار / رنگکار / خیاط / رویه‌کوب** (`carpentry`, `zirkar`, `rangkar`, `tailor`, `ruyekoob`) | Production line only — no prices, no customers | **Only their own stage:** mark it done (or undo), or report that it's delayed and why. Everything else is read-only. |
 | **مدیر (admin)** | Everything | All of the above, plus products, stations & capacities, categories, users, activity log |

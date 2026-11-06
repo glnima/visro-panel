@@ -565,3 +565,65 @@ describe("fabric and wood lists", () => {
     expect((await call("carpentry", "POST", "/api/options", { kind: "wood", name: "x" })).status).toBe(403);
   });
 });
+
+describe("accountant", () => {
+  let order: Order;
+
+  beforeAll(async () => {
+    expect((await login("accountant")).status).toBe(200);
+    const b = await boot("store");
+    const p = b.products.find((x) => x.active && x.price)!;
+    order = (await call("store", "POST", "/api/orders", { customer: "مشتری حسابدار", items: [{ productId: p.id, qty: 1 }] })).data.order;
+  });
+
+  it("sees money and customers, but not the warehouse", async () => {
+    const b = await boot("accountant");
+    expect(b.me.role).toBe("accountant");
+    expect(b.orders.find((o) => o.id === order.id)!.items[0].unitPrice).toBeGreaterThan(0);
+    expect(b.customers.length).toBeGreaterThan(0);
+    expect(b.materials).toEqual([]);
+    expect((await call("accountant", "GET", "/api/reports/throughput?from=2026-01-01&to=2026-12-31")).status).toBe(200);
+  });
+
+  it("records, voids and restores payments", async () => {
+    const add = await call("accountant", "POST", `/api/orders/${order.id}/payments`, { amount: 500, method: "transfer", note: "واریز" });
+    expect(add.status).toBe(200);
+    expect((await call("accountant", "POST", `/api/payments/${add.data.id}/void`)).status).toBe(200);
+    expect((await call("accountant", "POST", `/api/payments/${add.data.id}/restore`)).status).toBe(200);
+  });
+
+  it("can't change orders, production, delivery, catalog, customers or users", async () => {
+    const item = order.items[0].id;
+    const denied: [string, string, unknown?][] = [
+      ["POST", "/api/orders", {}],
+      ["PATCH", `/api/orders/${order.id}`, {}],
+      ["DELETE", `/api/orders/${order.id}`],
+      ["POST", `/api/orders/${order.id}/deliver`, { delivered: true }],
+      ["POST", `/api/items/${item}/stage`, { stage: "carpentry", done: true }],
+      ["POST", `/api/items/${item}/delays`, { stage: "carpentry", reason: "staff" }],
+      ["POST", "/api/products", {}],
+      ["POST", "/api/materials", {}],
+      ["POST", "/api/options", { kind: "wood", name: "x" }],
+      ["POST", "/api/customers", { name: "x" }],
+      ["PATCH", `/api/customers/${order.customerId}`, { name: "x" }],
+      ["GET", "/api/users"],
+      ["GET", "/api/audit"],
+    ];
+    for (const [method, path, body] of denied) {
+      expect((await call("accountant", method, path, body)).status, `${method} ${path}`).toBe(403);
+    }
+  });
+
+  it("gets a ledger with voided payments and who voided them; the store doesn't", async () => {
+    const add = await call("store", "POST", `/api/orders/${order.id}/payments`, { amount: 700, method: "cash" });
+    await call("accountant", "POST", `/api/payments/${add.data.id}/void`);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(new Date());
+    const r = await call("accountant", "GET", `/api/payments?from=${today}&to=${today}`);
+    expect(r.status).toBe(200);
+    const entry = r.data.entries.find((e: { id: number }) => e.id === add.data.id);
+    expect(entry).toMatchObject({ amount: 700, orderCode: order.code, by: "فروشگاه", voidedBy: "سارا (حسابدار)" });
+    expect(entry.voidedAt).toBeTruthy();
+    expect((await call("store", "GET", `/api/payments?from=${today}&to=${today}`)).status).toBe(403);
+    expect((await call("accountant", "GET", "/api/payments?from=bad&to=bad")).status).toBe(400);
+  });
+});
