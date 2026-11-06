@@ -1,12 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
-import { OID, PGLITE_PARSERS, parseDate, parseInt8, parseTimestamp, setDbFactory, wrapPglite, type Db } from "./db";
+import { OID, PGLITE_PARSERS, parseDate, parseInt8, parseNumeric, parseTimestamp, setDbFactory, wrapPglite, type Db } from "./db";
 
 // Node drivers: real Postgres when DATABASE_URL is set, otherwise PGlite files.
 
 export async function createPgDb(url: string): Promise<Db> {
   pg.types.setTypeParser(OID.int8, parseInt8);
+  pg.types.setTypeParser(OID.numeric, parseNumeric);
   pg.types.setTypeParser(OID.date, parseDate);
   pg.types.setTypeParser(OID.timestamptz, parseTimestamp);
   const pool = new pg.Pool({ connectionString: url, max: Number(process.env.DATABASE_POOL_SIZE || 5) });

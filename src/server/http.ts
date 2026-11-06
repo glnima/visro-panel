@@ -38,6 +38,13 @@ export function int(v: unknown, field: string, { min = 0, max = Number.MAX_SAFE_
   return n;
 }
 
+// A quantity with up to 3 decimals (2.5 metres).
+export function decimal(v: unknown, field: string, { min = 0, max = 1e9 } = {}): number {
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < min || n > max) throw bad(`${field} نامعتبره`);
+  return Math.round(n * 1000) / 1000;
+}
+
 export function isoDate(v: unknown, field: string): string {
   if (!isIsoDate(v)) throw bad(`${field} نامعتبره`);
   return v;

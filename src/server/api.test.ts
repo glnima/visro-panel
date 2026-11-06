@@ -344,10 +344,11 @@ describe("push notifications", () => {
     sent.length = 0;
     const b = await boot("store");
     const r = await call("store", "POST", "/api/orders", { customer: "مشتری اعلان", items: [{ productId: b.products[0].id, qty: 1 }] });
-    const roles = sent.map((s) => (s.audience as { roles: string[] }).roles[0]).sort();
+    const work = sent.filter((s) => s.message.title.startsWith("کار جدید"));
+    const roles = work.map((s) => (s.audience as { roles: string[] }).roles[0]).sort();
     expect(roles).toEqual(["carpentry", "tailor"]);
     expect(sent.every((s) => (s.audience as { exceptUserId: number }).exceptUserId === b.me.id)).toBe(true);
-    expect(sent[0].message.body).toContain(r.data.order.code);
+    expect(work[0].message.body).toContain(r.data.order.code);
   });
 
   it("tells the next stations when a stage is finished", async () => {
@@ -391,5 +392,176 @@ describe("sliding sessions", () => {
     // a fresh session is left alone
     const again = await handle(new Request("http://test/api/version", { headers: { cookie: cookies.admin } }));
     expect(again.headers.get("set-cookie")).toBeNull();
+  });
+});
+
+describe("warehouse", () => {
+  let sofa: number;
+  let nails: number;
+  let wool: number;
+  const stockOf = async (id: number) => (await boot("admin")).materials.find((m) => m.id === id)!.stock;
+  const orderFor = (qty: number, extra: object = {}) =>
+    call("store", "POST", "/api/orders", { customer: "مشتری انبار", items: [{ productId: sofa, qty }], ...extra });
+
+  beforeAll(async () => {
+    nails = (await call("workshop", "POST", "/api/materials", { name: "میخ تست", unit: "عدد", stock: 1000, minStock: 100 })).data.id;
+    wool = (await call("workshop", "POST", "/api/materials", { name: "پشم تست", unit: "متر", stock: 5, minStock: 1 })).data.id;
+    const b = await boot("admin");
+    const made = await call("admin", "POST", "/api/products", {
+      name: "sofa1", categoryId: b.categories[0].id, price: 1000,
+      bom: [{ materialId: nails, qty: 100 }, { materialId: wool, qty: 2.5 }],
+    });
+    expect(made.status).toBe(200);
+    sofa = made.data.id;
+  });
+
+  it("limits who can change materials and hides them from station workers", async () => {
+    expect((await call("store", "POST", "/api/materials", { name: "x", unit: "عدد" })).status).toBe(403);
+    expect((await call("carpentry", "GET", `/api/materials/${nails}/movements`)).status).toBe(403);
+    expect((await boot("carpentry")).materials).toEqual([]);
+    expect((await boot("store")).materials.length).toBeGreaterThan(0);
+  });
+
+  it("takes materials on order, supports decimals, and gives them back when edited or deleted", async () => {
+    const { order } = (await orderFor(2)).data;
+    expect(await stockOf(nails)).toBe(800);
+    expect(await stockOf(wool)).toBe(0);
+
+    const edited = await call("store", "PATCH", `/api/orders/${order.id}`, {
+      version: order.version, customer: order.customer, orderDate: order.orderDate, requested: order.requested,
+      items: [{ id: order.items[0].id, productId: sofa, qty: 1 }],
+    });
+    expect(edited.status).toBe(200);
+    expect(await stockOf(nails)).toBe(900);
+    expect(await stockOf(wool)).toBe(2.5);
+
+    await call("store", "DELETE", `/api/orders/${order.id}`);
+    expect(await stockOf(nails)).toBe(1000);
+    await call("store", "POST", `/api/orders/${order.id}/restore`);
+    expect(await stockOf(nails)).toBe(900);
+    expect((await call("store", "POST", `/api/orders/${order.id}/restore`)).status).toBe(409);
+    await call("store", "DELETE", `/api/orders/${order.id}`);
+    expect(await stockOf(nails)).toBe(1000);
+  });
+
+  it("keeps old orders as they were when a recipe changes", async () => {
+    const { order } = (await orderFor(1)).data;
+    await call("admin", "PATCH", `/api/products/${sofa}`, { bom: [{ materialId: nails, qty: 50 }] });
+    const fresh = (await boot("store")).orders.find((o) => o.id === order.id)!;
+    await call("store", "PATCH", `/api/orders/${order.id}`, {
+      version: fresh.version, customer: fresh.customer, orderDate: fresh.orderDate, requested: fresh.requested, notes: "فقط یادداشت",
+      items: [{ id: fresh.items[0].id, productId: sofa, qty: 1 }],
+    });
+    expect(await stockOf(nails)).toBe(900);
+    await call("store", "DELETE", `/api/orders/${order.id}`);
+    expect(await stockOf(nails)).toBe(1000);
+    expect(await stockOf(wool)).toBe(5);
+    await call("admin", "PATCH", `/api/products/${sofa}`, { bom: [{ materialId: nails, qty: 100 }, { materialId: wool, qty: 2.5 }] });
+  });
+
+  it("allows an order that exceeds stock, showing it as negative", async () => {
+    const { order } = (await orderFor(3)).data;
+    expect(await stockOf(wool)).toBe(-2.5);
+    await call("store", "DELETE", `/api/orders/${order.id}`);
+    expect(await stockOf(wool)).toBe(5);
+  });
+
+  it("records purchases and stock counts with a history", async () => {
+    await call("workshop", "POST", `/api/materials/${nails}/stock`, { kind: "purchase", qty: 500, note: "خرید" });
+    expect(await stockOf(nails)).toBe(1500);
+    await call("workshop", "POST", `/api/materials/${nails}/stock`, { kind: "adjust", setTo: 1000, note: "شمارش" });
+    expect(await stockOf(nails)).toBe(1000);
+    const { movements } = (await call("store", "GET", `/api/materials/${nails}/movements`)).data;
+    expect(movements[0]).toMatchObject({ delta: -500, kind: "adjust", note: "شمارش" });
+    const sum = movements.reduce((s: number, m: { delta: number }) => s + m.delta, 0);
+    expect(sum).toBe(1000);
+  });
+
+  it("sells from shop stock immediately, without touching materials", async () => {
+    expect((await orderFor(1, { mode: "sold" })).status).toBe(409); // nothing in the shop yet
+    await call("store", "POST", `/api/products/${sofa}/ready`, { delta: 2 });
+    const r = await orderFor(1, { mode: "sold", payment: { amount: 1000, method: "cash" } });
+    expect(r.status).toBe(200);
+    expect(r.data.order.deliveredAt).toBeTruthy();
+    expect(r.data.order.fromStock).toBe(true);
+    expect(r.data.order.payments).toHaveLength(1);
+    expect(await stockOf(nails)).toBe(1000);
+    const ready = async () => (await boot("store")).products.find((p) => p.id === sofa)!.readyStock;
+    expect(await ready()).toBe(1);
+
+    // a failed sale leaves nothing behind
+    const before = (await boot("store")).orders.length;
+    expect((await orderFor(5, { mode: "sold" })).status).toBe(409);
+    expect((await boot("store")).orders.length).toBe(before);
+    expect(await ready()).toBe(1);
+
+    // cancelling puts the piece back; "ready" waits at final delivery
+    await call("store", "DELETE", `/api/orders/${r.data.order.id}`);
+    expect(await ready()).toBe(2);
+    const held = (await orderFor(1, { mode: "ready" })).data.order;
+    expect(held.deliveredAt).toBeNull();
+    expect(await ready()).toBe(1);
+    const edit = await call("store", "PATCH", `/api/orders/${held.id}`, {
+      version: held.version, customer: held.customer, orderDate: held.orderDate, requested: held.requested,
+      items: [{ id: held.items[0].id, productId: sofa, qty: 2 }],
+    });
+    expect(edit.status).toBe(409);
+    expect((await call("store", "POST", `/api/products/${sofa}/ready`, { delta: -5 })).status).toBe(409);
+  });
+});
+
+describe("payments", () => {
+  let order: Order;
+
+  beforeAll(async () => {
+    const b = await boot("store");
+    const p = b.products.find((x) => x.active && x.price)!;
+    const r = await call("store", "POST", "/api/orders", {
+      customer: "مشتری حساب", items: [{ productId: p.id, qty: 1 }], payment: { amount: 1000, method: "card", note: "بیعانه" },
+    });
+    order = r.data.order;
+  });
+
+  it("records a deposit with the order", () => {
+    expect(order.payments[0]).toMatchObject({ amount: 1000, method: "card", note: "بیعانه" });
+  });
+
+  it("adds payments, refuses overpayment and future dates", async () => {
+    const total = order.items[0].unitPrice!;
+    expect((await call("store", "POST", `/api/orders/${order.id}/payments`, { amount: total, method: "cash" })).status).toBe(409);
+    expect((await call("store", "POST", `/api/orders/${order.id}/payments`, { amount: 1, method: "bitcoin" })).status).toBe(400);
+    expect((await call("store", "POST", `/api/orders/${order.id}/payments`, { amount: 1, method: "cash", paidOn: "2999-01-01" })).status).toBe(400);
+    expect((await call("store", "POST", `/api/orders/${order.id}/payments`, { amount: total - 1000, method: "cash" })).status).toBe(200);
+    const fresh = (await boot("store")).orders.find((o) => o.id === order.id)!;
+    expect(fresh.payments.reduce((s, p) => s + p.amount, 0)).toBe(total);
+  });
+
+  it("voids and restores a payment", async () => {
+    const pay = (await boot("store")).orders.find((o) => o.id === order.id)!.payments[0];
+    expect((await call("store", "POST", `/api/payments/${pay.id}/void`)).status).toBe(200);
+    expect((await call("store", "POST", `/api/payments/${pay.id}/void`)).status).toBe(409);
+    expect((await boot("store")).orders.find((o) => o.id === order.id)!.payments).toHaveLength(1);
+    expect((await call("store", "POST", `/api/payments/${pay.id}/restore`)).status).toBe(200);
+  });
+
+  it("hides money from anyone who can't see prices", async () => {
+    expect((await boot("workshop")).orders.find((o) => o.id === order.id)!.payments).toEqual([]);
+    expect((await call("workshop", "POST", `/api/orders/${order.id}/payments`, { amount: 1, method: "cash" })).status).toBe(403);
+  });
+});
+
+describe("fabric and wood lists", () => {
+  it("adds, renames, removes and revives options; hidden from station workers", async () => {
+    const r = await call("store", "POST", "/api/options", { kind: "fabric", name: "كتان  آبي" });
+    expect(r.status).toBe(200);
+    const find = async () => (await boot("store")).options.find((o) => o.id === r.data.id)!;
+    expect((await find()).name).toBe("کتان آبی");
+    expect((await call("store", "POST", "/api/options", { kind: "fabric", name: "کتان آبی" })).status).toBe(409);
+    await call("store", "PATCH", `/api/options/${r.data.id}`, { active: false });
+    expect((await find()).active).toBe(false);
+    expect((await call("store", "POST", "/api/options", { kind: "fabric", name: "کتان آبی" })).status).toBe(200);
+    expect((await find()).active).toBe(true);
+    expect((await boot("carpentry")).options).toEqual([]);
+    expect((await call("carpentry", "POST", "/api/options", { kind: "wood", name: "x" })).status).toBe(403);
   });
 });

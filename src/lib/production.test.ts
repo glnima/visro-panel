@@ -31,7 +31,7 @@ function order(items: Production[], extra: Partial<Order> = {}): Order {
   return {
     id: ++seq, code: "SF-1", customerId: 1, customer: "مشتری", items: items.map(item),
     orderDate: "2026-10-01", requested: "2026-10-15", registeredAt: "2026-10-01T07:00:00.000Z",
-    deliveredAt: null, notes: "", version: 1, ...extra,
+    deliveredAt: null, notes: "", version: 1, fromStock: false, payments: [], ...extra,
   };
 }
 

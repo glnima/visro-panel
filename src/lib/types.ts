@@ -28,6 +28,11 @@ export const canDeliver = (role: Role) => role === "admin" || role === "store" |
 
 export const canSeePrices = (role: Role) => role === "admin" || role === "store";
 
+// The warehouse: everyone in the office and the supervisor can see it; only
+// the admin and supervisor receive or correct raw materials.
+export const canSeeInventory = (role: Role) => role === "admin" || role === "store" || role === "workshop";
+export const canEditMaterials = (role: Role) => role === "admin" || role === "workshop";
+
 export type User = {
   id: number;
   username: string;
@@ -51,13 +56,62 @@ export type Category = {
   sort: number;
 };
 
+export type BomLine = { materialId: number; qty: number };
+
 export type Product = {
   id: number;
   name: string;
   categoryId: number;
   price: number | null; // null when the viewer may not see prices
   active: boolean;
+  readyStock: number; // finished pieces standing in the shop
+  bom: BomLine[]; // raw materials one piece needs
 };
+
+export type Material = {
+  id: number;
+  name: string;
+  unit: string; // عدد، متر، کیلو…
+  stock: number; // negative means more was promised than we have
+  minStock: number; // warn at or below this
+  active: boolean;
+};
+
+export type StockMovement = {
+  id: number;
+  delta: number;
+  kind: "purchase" | "adjust" | "consume" | "release";
+  note: string;
+  orderCode: string | null;
+  user: string | null;
+  at: string;
+};
+
+export type OptionKind = "fabric" | "wood";
+
+export type CatalogOption = { id: number; kind: OptionKind; name: string; active: boolean };
+
+export const PAYMENT_METHODS = {
+  cash: "نقد",
+  card: "کارت‌خوان",
+  transfer: "کارت‌به‌کارت / واریز",
+  cheque: "چک",
+} as const;
+export type PaymentMethod = keyof typeof PAYMENT_METHODS;
+
+export type Payment = {
+  id: number;
+  amount: number;
+  method: PaymentMethod;
+  paidOn: string; // ISO yyyy-mm-dd
+  note: string;
+  by: string | null;
+};
+
+// How a new order enters the system.
+//  production: goes through the workshop · ready: from shop stock, waits for hand-over ·
+//  sold: from shop stock, handed over right now
+export type OrderMode = "production" | "ready" | "sold";
 
 export type Customer = {
   id: number;
@@ -114,6 +168,8 @@ export type Order = {
   deliveredAt: string | null; // ISO yyyy-mm-dd
   notes: string;
   version: number;
+  fromStock: boolean; // sold from finished pieces in the shop
+  payments: Payment[]; // empty when the viewer may not see prices
 };
 
 export const MAX_PRODUCTS = 200;
@@ -126,6 +182,8 @@ export type Bootstrap = {
   products: Product[];
   customers: Customer[];
   orders: Order[];
+  materials: Material[]; // empty for roles that don't see the warehouse
+  options: CatalogOption[];
 };
 
 export type OrderEvent = {

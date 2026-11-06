@@ -53,6 +53,54 @@ const ORDERS: SeedOrder[] = [
 ];
 
 // Replaces all orders, products and customers with demo data. Users are kept.
+const MATERIALS: [name: string, unit: string, stock: number, min: number][] = [
+  ["میخ", "عدد", 5000, 500],
+  ["فوم", "ورق", 40, 10],
+  ["پارچه مخمل", "متر", 12, 20],
+  ["چوب راش", "متر", 90, 15],
+  ["رنگ و کیلر", "لیتر", 25, 5],
+  ["فنر", "عدد", 300, 50],
+];
+
+// per one piece: product name → [material, qty]
+const RECIPES: Record<string, [string, number][]> = {
+  "کاناپه سه‌نفره": [["میخ", 100], ["فوم", 3], ["پارچه مخمل", 8], ["چوب راش", 6], ["فنر", 24]],
+  "مبل راحتی ال‌شکل": [["میخ", 160], ["فوم", 5], ["پارچه مخمل", 12], ["چوب راش", 9], ["فنر", 36]],
+  "صندلی ناهارخوری (ست ۶ عددی)": [["میخ", 60], ["فوم", 1], ["پارچه مخمل", 3], ["چوب راش", 6], ["رنگ و کیلر", 1.5]],
+  "مبل کلاسیک هفت‌نفره": [["میخ", 250], ["فوم", 7], ["پارچه مخمل", 18], ["چوب راش", 14], ["رنگ و کیلر", 2], ["فنر", 56]],
+  "تخت‌خواب‌شو": [["میخ", 120], ["فوم", 4], ["پارچه مخمل", 9], ["چوب راش", 7], ["فنر", 30]],
+  "میز جلومبلی": [["میخ", 20], ["چوب راش", 3], ["رنگ و کیلر", 0.5]],
+  "میز ناهارخوری": [["میخ", 30], ["چوب راش", 6], ["رنگ و کیلر", 1]],
+};
+
+const READY_STOCK: Record<string, number> = { "کاناپه سه‌نفره": 2, "میز جلومبلی": 3, "صندلی ناهارخوری (ست ۶ عددی)": 1 };
+
+const FABRICS = ["مخمل زرشکی", "مخمل سرمه‌ای", "چرم مصنوعی مشکی", "چرم قهوه‌ای", "کتان کرم", "ترک طوسی"];
+const WOODS = ["راش روشن", "راش تیره", "گردو تیره", "گردو", "بلوط طبیعی"];
+
+// Demo warehouse: materials, recipes, shop stock and pick-lists, matched to products by name.
+export async function seedWarehouse(q: Queryable): Promise<void> {
+  const ids = new Map<string, number>();
+  for (const [name, unit, stock, min] of MATERIALS) {
+    const [row] = await q.query<{ id: number }>(
+      `insert into materials (name, unit, stock, min_stock) values ($1, $2, $3, $4)
+         on conflict (name) do update set name = excluded.name returning id`,
+      [name, unit, stock, min]
+    );
+    ids.set(name, row.id);
+  }
+  const products = await q.query<{ id: number; name: string }>("select id, name from products");
+  for (const p of products) {
+    for (const [material, qty] of RECIPES[p.name] ?? []) {
+      await q.query("insert into product_materials (product_id, material_id, qty) values ($1, $2, $3) on conflict do nothing", [p.id, ids.get(material), qty]);
+    }
+    if (READY_STOCK[p.name]) await q.query("update products set ready_stock = $2 where id = $1", [p.id, READY_STOCK[p.name]]);
+  }
+  for (const [kind, names] of [["fabric", FABRICS], ["wood", WOODS]] as const) {
+    for (const name of names) await q.query("insert into catalog_options (kind, name) values ($1, $2) on conflict do nothing", [kind, name]);
+  }
+}
+
 export const DEMO_USERS: [username: string, name: string, role: Role][] = [
   ["admin", "مدیر", "admin"],
   ["store", "فروشگاه", "store"],
@@ -91,6 +139,8 @@ export async function seedDemo(db: Db, { withDemoUsers = false } = {}): Promise<
     await q.query("delete from orders");
     await q.query("delete from products");
     await q.query("delete from customers");
+    await q.query("delete from materials");
+    await q.query("delete from catalog_options");
 
     if (withDemoUsers) await ensureDemoUsers(q);
     // who "did" each finished stage in the demo: that station's worker, if there is one
@@ -109,8 +159,10 @@ export async function seedDemo(db: Db, { withDemoUsers = false } = {}): Promise<
       prices.push(price);
     }
 
+    await seedWarehouse(q);
+
     await q.query("select setval('order_code_seq', 1027, false)");
-    for (const o of ORDERS) {
+    for (const [orderIndex, o] of ORDERS.entries()) {
       const [c] = await q.query<{ id: number }>(
         "insert into customers (name) values ($1) on conflict (name) do update set name = excluded.name returning id",
         [o.customer]
@@ -158,6 +210,15 @@ export async function seedDemo(db: Db, { withDemoUsers = false } = {}): Promise<
           );
           await event("delay_reported", at, workers.get(stage) ?? null, { itemId: item.id, stage, details: { reason, note, eta } });
         }
+      }
+      // some money received: delivered orders in full, others a deposit or nothing yet
+      const total = o.items.reduce((s, [p, qty]) => s + prices[p] * qty, 0);
+      const paid = o.delivered !== undefined ? total : orderIndex % 3 === 0 ? 0 : Math.round((total * (orderIndex % 3 === 1 ? 0.3 : 0.5)) / 1e6) * 1e6;
+      if (paid > 0) {
+        await q.query("insert into payments (order_id, amount, method, paid_on, created_by) values ($1, $2, $3, $4, $5)", [
+          row.id, paid, orderIndex % 2 ? "card" : "cash", orderDate, workers.get("store") ?? null,
+        ]);
+        await event("payment_added", `${orderDate}T10:40:00+03:30`, workers.get("store") ?? null, { details: { amount: paid } });
       }
       if (o.delivered !== undefined) {
         await event("delivered", `${addDays(today, -o.delivered)}T16:00:00+03:30`, workers.get("workshop") ?? null);

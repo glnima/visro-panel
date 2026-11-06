@@ -16,6 +16,11 @@ export const EVENT_LABELS: Record<string, string> = {
   product_edited: "محصول رو ویرایش کرد",
   product_deleted: "محصول رو حذف کرد",
   product_restored: "محصول رو برگردوند",
+  payment_added: "پرداخت ثبت کرد",
+  payment_voided: "پرداخت رو باطل کرد",
+  payment_restored: "پرداخت رو برگردوند",
+  material_added: "ماده‌ی انبار اضافه کرد",
+  ready_stock_changed: "موجودی آماده رو تغییر داد",
   user_added: "کاربر ساخت",
   user_edited: "کاربر رو ویرایش کرد",
 };

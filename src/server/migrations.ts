@@ -165,4 +165,66 @@ export const MIGRATIONS: { id: number; sql: string[] }[] = [
       `alter table sessions add column renewed_at timestamptz not null default now()`,
     ],
   },
+  {
+    id: 5,
+    sql: [
+      // the warehouse: raw materials, each product's recipe, and every stock change
+      `create table materials (
+        id serial primary key,
+        name text not null unique,
+        unit text not null,
+        stock numeric(14, 3) not null default 0,
+        min_stock numeric(14, 3) not null default 0,
+        active boolean not null default true,
+        created_at timestamptz not null default now()
+      )`,
+      `create table product_materials (
+        product_id int not null references products(id) on delete cascade,
+        material_id int not null references materials(id),
+        qty numeric(14, 3) not null check (qty > 0),
+        primary key (product_id, material_id)
+      )`,
+      `create table stock_movements (
+        id bigserial primary key,
+        material_id int not null references materials(id) on delete cascade,
+        delta numeric(14, 3) not null,
+        kind text not null check (kind in ('purchase', 'adjust', 'consume', 'release')),
+        order_id int references orders(id) on delete set null,
+        item_id int references order_items(id) on delete set null,
+        note text not null default '',
+        user_id int references users(id) on delete set null,
+        at timestamptz not null default now()
+      )`,
+      `create index stock_movements_material_idx on stock_movements(material_id, id)`,
+      `create index stock_movements_item_idx on stock_movements(item_id)`,
+      // finished pieces standing in the shop, and orders sold from them
+      `alter table products add column ready_stock int not null default 0`,
+      `alter table orders add column from_stock boolean not null default false`,
+      // money received per order; voided rather than deleted, so the record stays
+      `create table payments (
+        id serial primary key,
+        order_id int not null references orders(id) on delete cascade,
+        amount bigint not null check (amount > 0),
+        method text not null check (method in ('cash', 'card', 'transfer', 'cheque')),
+        paid_on date not null,
+        note text not null default '',
+        created_by int references users(id) on delete set null,
+        created_at timestamptz not null default now(),
+        voided_at timestamptz
+      )`,
+      `create index payments_order_idx on payments(order_id)`,
+      // the pick-lists for fabric and wood; start from what past orders used
+      `create table catalog_options (
+        id serial primary key,
+        kind text not null check (kind in ('fabric', 'wood')),
+        name text not null,
+        active boolean not null default true,
+        unique (kind, name)
+      )`,
+      `insert into catalog_options (kind, name)
+        select distinct 'fabric', fabric_color from order_items where fabric_color <> ''
+        union
+        select distinct 'wood', wood_color from order_items where wood_color <> ''`,
+    ],
+  },
 ];

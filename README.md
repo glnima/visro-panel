@@ -155,6 +155,13 @@ Every change is recorded in the activity log (رویدادها) with who did it 
   - Filters for delayed, late, due within 3 days and ready to deliver, plus search and a station filter (tap a station's load card).
   - **Delays:** a reason (materials, fabric not arrived, machine broken, short-staffed, rework, waiting for the customer, other), an optional note and an estimated finish date. Finishing the stage clears the delay.
 - **Board view** — capacity bar per station (green under 60%, amber from 60%, red at 100%+) and a red banner when a station is full. **Each item has its own card** and moves through the stations on its own. The whole order reaches *Final delivery* once every item is finished. Each card has a "done" button, a per-stage editor, and a printable sheet. Every stage change and delivery can be undone from the toast. On phones, one station is shown at a time.
+- **Warehouse (انبار)** — three parts:
+  - **Raw materials:** name, unit, stock and a minimum level, with warnings when low or short. Receive goods, record a stock count, and see every movement. Admin and supervisor can change stock; the store can view it.
+  - **Ready in the shop:** how many finished pieces of each model are standing in the shop.
+  - **Fabric and wood lists:** the choices offered by the order form.
+- **Product recipes** — each model lists what one piece uses (e.g. 100 nails, 2 m of wool). Registering an order for production takes those materials from stock immediately. Editing the quantity or cancelling the order puts the difference back. If stock runs short the order still goes through: the form warns, and the material shows as negative («کسری») until it's restocked. Unchanged order lines keep what they took even if the recipe changes later.
+- **Selling from the shop** — on the order form, «فروش از فروشگاه» registers the order as delivered right away and takes it from the ready count, with no workshop steps. «آماده، تحویل بعداً» takes it from the same count but waits in final delivery until the customer collects it. Both need enough pieces in the ready count; cancelling the order puts them back. Neither uses raw materials.
+- **Accounting (حسابداری)** — a deposit can be entered with the order, and more payments added later (amount, method, date, note). Every order shows paid and remaining; the tab lists who owes what by order or by customer, what was received this month, and delivered orders not yet settled. Payments can't exceed what's owed, and are voided rather than deleted, so the record stays. Admin and store only.
 - **Customers** — list with phone and notes, order count, total spent, and order history per customer.
 - **History** — delivered orders, with search and a from/to date filter (empty means "any date"). Shows when a delivery was late and can return an order to the workshop.
 - **Reports** — sales, on-time delivery rate, average delay and currently overdue orders for any date range, plus sales by Jalali month and work completed per station.
@@ -208,7 +215,7 @@ All "today" calculations use Tehran time (`NEXT_PUBLIC_APP_TIMEZONE`, default `A
 - **Auth:** username + password (PBKDF2-SHA256 via Web Crypto, so the same code runs in the browser demo), and an httpOnly session cookie that lasts 30 days. Deactivating a user or changing their password or role signs them out everywhere. Mutations require an `x-mizan` header, which blocks cross-site form posts.
 - **Concurrency:** order codes come from a Postgres sequence. Stage changes lock the order row. Editing an order sends the version you started from, and the server rejects the save (409) if someone changed the order in the meantime.
 
-Tables: `users`, `sessions`, `push_subscriptions`, `app_settings`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item, plus when and by whom each stage was finished), `item_delays`, `order_events` (activity log and order timelines), `feedback`, `app_meta` (change counter).
+Tables: `users`, `sessions`, `push_subscriptions`, `app_settings`, `stations`, `categories`, `products`, `customers`, `orders`, `order_items` (production state per item, plus when and by whom each stage was finished), `item_delays`, `order_events` (activity log and order timelines), `materials`, `product_materials` (recipes), `stock_movements`, `payments`, `catalog_options` (fabric and wood lists), `feedback`, `app_meta` (change counter).
 
 ```
 src/
